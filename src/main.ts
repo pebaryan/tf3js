@@ -66,11 +66,29 @@ function init() {
   window.addEventListener('resize', onWindowResize);
 
   const instructions = document.getElementById('instructions')!;
-  instructions.addEventListener('click', () => {
+  
+  function startGame() {
+    if (isPlaying) return;
     instructions.classList.add('hidden');
     player.lockPointer();
     isPlaying = true;
-  });
+  }
+  
+  instructions.addEventListener('click', startGame);
+  
+  // Gamepad Start button (button 9) to start game
+  function checkGamepadStart() {
+    if (isPlaying) return;
+    const gamepads = navigator.getGamepads();
+    for (const gp of gamepads) {
+      if (gp && gp.buttons[9]?.pressed) {
+        startGame();
+        return;
+      }
+    }
+    requestAnimationFrame(checkGamepadStart);
+  }
+  checkGamepadStart();
 
   animate();
 }

@@ -2,11 +2,13 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createLevel } from './level';
 import { Player } from './player';
+import { Target } from './target';
 
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let renderer: THREE.WebGLRenderer;
 let player: Player;
+let targets: Target[] = [];
 let clock: THREE.Clock;
 let world: CANNON.World;
 let isPlaying = false;
@@ -54,6 +56,13 @@ function init() {
   player = new Player(camera, scene, world);
   scene.add(player.group);
 
+  // Create shooting targets
+  targets.push(new Target(scene, world, 0, 0, -15));   // Center target
+  targets.push(new Target(scene, world, -8, 0, -20));  // Left target
+  targets.push(new Target(scene, world, 8, 0, -20));   // Right target
+  targets.push(new Target(scene, world, -5, 2, -15));  // Elevated left
+  targets.push(new Target(scene, world, 5, 2, -15));   // Elevated right
+
   window.addEventListener('resize', onWindowResize);
 
   const instructions = document.getElementById('instructions')!;
@@ -78,7 +87,7 @@ function animate() {
 
   if (isPlaying && player) {
     // 1. Player computes desired velocity and writes it to body
-    player.update(delta);
+    player.update(delta, targets);
     // 2. Cannon resolves collisions (pushes body out of walls/floor)
     world.step(1 / 60, delta, 3);
     // 3. Sync group position from cannon result
@@ -87,6 +96,10 @@ function animate() {
       player.body.position.y,
       player.body.position.z,
     );
+    // 4. Update targets
+    for (const target of targets) {
+      target.update(delta, camera.position);
+    }
   }
 
   renderer.render(scene, camera);

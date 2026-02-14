@@ -51,6 +51,7 @@ export class Player {
   private isMantling = false;
   private mantleTimer = 0;
   private mantleTarget = new THREE.Vector3();
+  private wallJumpCooldown = 0;
 
   private coyoteTime = 0.12;
   private coyoteTimer = 0;
@@ -96,7 +97,15 @@ export class Player {
   private health = 100;
   private titanMeter = 0;
   private lastShotTime = 0;
-  private bullets: { mesh: THREE.Mesh; velocity: THREE.Vector3; time: number }[] = [];
+  private bullets: { 
+    mesh: THREE.Mesh; 
+    trail: THREE.Line;
+    trailPositions: THREE.Vector3[];
+    maxTrailLength: number;
+    velocity: THREE.Vector3; 
+    time: number 
+  }[] = [];
+  private readonly BULLET_GRAVITY = -35;
 
   // cannon body (collision only)
   body: CANNON.Body;
@@ -177,10 +186,16 @@ export class Player {
     }
   }
 
+  // --- look sensitivity ---
+  private readonly LOOK_SENS_X = 0.002;
+  private readonly LOOK_SENS_Y = 0.0012;
+  private readonly ADS_SENS_MULT = 0.4; // 40% speed when ADS
+
   private onMouseMove(e: MouseEvent) {
     if (!document.pointerLockElement) return;
-    this.euler.y -= e.movementX * 0.002;
-    this.euler.x -= e.movementY * 0.0012;
+    const sensMult = this.gamepadADS ? this.ADS_SENS_MULT : 1.0;
+    this.euler.y -= e.movementX * this.LOOK_SENS_X * sensMult;
+    this.euler.x -= e.movementY * this.LOOK_SENS_Y * sensMult;
     this.euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.euler.x));
   }
 
@@ -192,9 +207,15 @@ export class Player {
     if (!gp) return;
 
     const dz = 0.15;
-    const ax = (i: number) => Math.abs(gp.axes[i]) > dz ? gp.axes[i] : 0;
-    this.gamepadMove.set(ax(0), ax(1));   // left stick  = move
-    this.gamepadLook.set(ax(2), ax(3));   // right stick = look
+    // Reduced sensitivity for movement stick (left stick)
+    const moveSens = 0.6;
+    const lookSens = 1.0;
+    const ax = (i: number, sens: number) => {
+      const v = gp.axes[i];
+      return Math.abs(v) > dz ? v * sens : 0;
+    };
+    this.gamepadMove.set(ax(0, moveSens), ax(1, moveSens));   // left stick  = move
+    this.gamepadLook.set(ax(2, lookSens), ax(3, lookSens));   // right stick = look
 
     // Ninja layout: LB=jump, RB=crouch, LT=ADS, RT=fire
     const lb = gp.buttons[4]?.pressed ?? false;
@@ -216,8 +237,9 @@ export class Player {
     this.gamepadADS = lt > 0.3;
 
     if (this.gamepadLook.length() > dz) {
-      this.euler.y -= this.gamepadLook.x * 0.04;
-      this.euler.x -= this.gamepadLook.y * 0.025;
+      const adsMult = this.gamepadADS ? this.ADS_SENS_MULT : 1.0;
+      this.euler.y -= this.gamepadLook.x * 0.04 * adsMult;
+      this.euler.x -= this.gamepadLook.y * 0.025 * adsMult;
       this.euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.euler.x));
     }
   }
@@ -379,6 +401,7 @@ export class Player {
       this.vel.z = n.z * this.WALL_JUMP_OUT;
       this.vel.y = this.WALL_JUMP_UP;
       this.isWallRunning = false;
+      this.wallJumpCooldown = 0.5; // 0.5s before can wallrun again
       this.jumpCount = 1;
       this.jumpBufferTimer = 0;
       return;
@@ -406,11 +429,11 @@ export class Player {
   /*  Main update – called AFTER world.step()                            */
   /* ------------------------------------------------------------------ */
 
-  update(delta: number) {
+  update(delta: number, targets?: any[]) {
     this.pollGamepad();
     this.move(delta);
     this.applyVelocity();
-    this.handleShooting(delta);
+    this.handleShooting(delta, targets);
     this.syncCamera();
     this.updateUI();
   }
@@ -439,7 +462,23 @@ export class Player {
       this.coyoteTimer -= dt;
     }
 
-    // --- Jump buffer ---
+    // --- Wall run detection FIRST (before jump) ---
+    // Decrement cooldown
+    if (this.wallJumpCooldown > 0) {
+      this.wallJumpCooldown -= dt;
+    }
+    const wall = this.checkWall();
+    // Can only start wallrun if cooldown has expired
+    if (!this.isGrounded && !this.isMantling && wall.hit && this.hSpeed() > 3 && !this.isWallRunning && this.wallJumpCooldown <= 0) {
+      this.isWallRunning = true;
+      this.wallNormal = wall.normal;
+      this.wallRunTimer = 0;
+    }
+    if (this.isWallRunning && (this.isGrounded || !wall.hit || this.wallRunTimer > this.WALL_RUN_MAX_TIME)) {
+      this.isWallRunning = false;
+    }
+
+    // --- Jump buffer (after wall detection so wallrun is active) ---
     if (this.jumpBufferTimer > 0) {
       this.jumpBufferTimer -= dt;
       this.tryJump();
@@ -460,17 +499,6 @@ export class Player {
           this.mantleTarget.add(fwd.multiplyScalar(0.5));
         }
       }
-    }
-
-    // --- Wall run detection ---
-    const wall = this.checkWall();
-    if (!this.isGrounded && !this.isMantling && wall.hit && this.hSpeed() > 5 && !this.isWallRunning) {
-      this.isWallRunning = true;
-      this.wallNormal = wall.normal;
-      this.wallRunTimer = 0;
-    }
-    if (this.isWallRunning && (this.isGrounded || !wall.hit || this.wallRunTimer > this.WALL_RUN_MAX_TIME)) {
-      this.isWallRunning = false;
     }
 
     // --- Build velocity based on state ---
@@ -591,7 +619,7 @@ export class Player {
   /*  Shooting                                                           */
   /* ------------------------------------------------------------------ */
 
-  private handleShooting(delta: number) {
+  private handleShooting(delta: number, targets?: any[]) {
     if (this.keys.fire || this.gamepadFire) {
       const now = performance.now();
       if (now - this.lastShotTime > 100) {
@@ -602,19 +630,145 @@ export class Player {
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
       b.time += delta;
+      
+      // Apply gravity to bullet
+      b.velocity.y += this.BULLET_GRAVITY * delta;
+      
+      // Update position
       b.mesh.position.add(b.velocity.clone().multiplyScalar(delta));
-      if (b.time > 3) { this.scene.remove(b.mesh); this.bullets.splice(i, 1); }
+      
+      // Orient bullet to face velocity direction
+      if (b.velocity.length() > 0.1) {
+        const lookTarget = b.mesh.position.clone().add(b.velocity);
+        b.mesh.lookAt(lookTarget);
+      }
+      
+      // Update trail
+      b.trailPositions.unshift(b.mesh.position.clone());
+      if (b.trailPositions.length > b.maxTrailLength) {
+        b.trailPositions.pop();
+      }
+      
+      // Update trail geometry
+      if (b.trailPositions.length >= 2) {
+        const positions: number[] = [];
+        for (const pos of b.trailPositions) {
+          positions.push(pos.x, pos.y, pos.z);
+        }
+        b.trail.geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        (b.trail.geometry as THREE.BufferGeometry).attributes.position.needsUpdate = true;
+        
+        // Fade trail based on age
+        const alpha = 1 - (b.time / 3);
+        (b.trail.material as THREE.LineBasicMaterial).opacity = Math.max(0, alpha * 0.5);
+      }
+      
+      // Check target hits
+      let hit = false;
+      if (targets) {
+        for (const target of targets) {
+          if (target.checkBulletHit && target.checkBulletHit(b.mesh.position)) {
+            target.takeDamage(25, b.mesh.position);
+            hit = true;
+            break;
+          }
+        }
+      }
+      
+      if (hit || b.time > 3 || b.mesh.position.y < -5) { 
+        this.scene.remove(b.mesh);
+        this.scene.remove(b.trail);
+        b.trail.geometry.dispose();
+        (b.trail.material as THREE.LineBasicMaterial).dispose();
+        this.bullets.splice(i, 1); 
+      }
     }
   }
 
   private shoot() {
-    const geo = new THREE.SphereGeometry(0.04, 6, 6);
+    const bulletSpeed = 120; // m/s - realistic rifle speed
+    const gravity = Math.abs(this.BULLET_GRAVITY);
+    
+    // Cast ray from camera to find crosshair point
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    const intersects = raycaster.intersectObjects(this.getMeshes());
+    
+    // Determine target point - either where crosshair hits, or a point at distance
+    let targetPoint: THREE.Vector3;
+    if (intersects.length > 0 && intersects[0].distance < 100) {
+      targetPoint = intersects[0].point;
+    } else {
+      // Default target at 30m distance along crosshair
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+      targetPoint = this.camera.position.clone().add(fwd.multiplyScalar(30));
+    }
+    
+    // Calculate ballistic trajectory to hit target
+    const startPos = this.group.position.clone().add(
+      new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion).multiplyScalar(0.5)
+    );
+    const displacement = targetPoint.clone().sub(startPos);
+    const horizontalDist = Math.sqrt(displacement.x * displacement.x + displacement.z * displacement.z);
+    const verticalDist = displacement.y;
+    
+    // Calculate launch angle to hit target
+    // Using the ballistic trajectory equation
+    const discriminant = bulletSpeed * bulletSpeed * bulletSpeed * bulletSpeed - 
+                        gravity * (gravity * horizontalDist * horizontalDist + 2 * verticalDist * bulletSpeed * bulletSpeed);
+    
+    let launchAngle = 0;
+    if (discriminant >= 0) {
+      // Two solutions - use the lower angle (direct shot) when possible
+      const tanTheta1 = (bulletSpeed * bulletSpeed + Math.sqrt(discriminant)) / (gravity * horizontalDist);
+      const tanTheta2 = (bulletSpeed * bulletSpeed - Math.sqrt(discriminant)) / (gravity * horizontalDist);
+      const angle1 = Math.atan(tanTheta1);
+      const angle2 = Math.atan(tanTheta2);
+      // Choose the shallower angle (more direct) unless it's too steep
+      launchAngle = Math.abs(angle1) < Math.abs(angle2) ? angle1 : angle2;
+    }
+    
+    // Build velocity vector
+    const horizontalDir = new THREE.Vector3(displacement.x, 0, displacement.z).normalize();
+    const velocity = new THREE.Vector3(
+      horizontalDir.x * Math.cos(launchAngle) * bulletSpeed,
+      Math.sin(launchAngle) * bulletSpeed,
+      horizontalDir.z * Math.cos(launchAngle) * bulletSpeed
+    );
+    
+    // Create bullet mesh
+    const geo = new THREE.CapsuleGeometry(0.02, 0.08, 4, 8);
     const mat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
     const bullet = new THREE.Mesh(geo, mat);
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-    bullet.position.copy(this.group.position).add(fwd.clone().multiplyScalar(0.5));
+    
+    bullet.position.copy(startPos);
+    // Orient to velocity
+    if (velocity.length() > 0.1) {
+      const lookTarget = startPos.clone().add(velocity);
+      bullet.lookAt(lookTarget);
+      bullet.rotateX(Math.PI / 2);
+    }
     this.scene.add(bullet);
-    this.bullets.push({ mesh: bullet, velocity: fwd.multiplyScalar(80), time: 0 });
+    
+    // Create trail
+    const trailGeo = new THREE.BufferGeometry();
+    const trailMat = new THREE.LineBasicMaterial({ 
+      color: 0x00ffcc, 
+      transparent: true, 
+      opacity: 0.5,
+      linewidth: 2
+    });
+    const trail = new THREE.Line(trailGeo, trailMat);
+    this.scene.add(trail);
+    
+    this.bullets.push({ 
+      mesh: bullet, 
+      trail,
+      trailPositions: [bullet.position.clone()],
+      maxTrailLength: 20,
+      velocity: velocity, 
+      time: 0 
+    });
     this.titanMeter = Math.min(100, this.titanMeter + 0.5);
   }
 

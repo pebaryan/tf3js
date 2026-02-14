@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Titanfall 3JS</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        overflow: hidden;
+        background: #000;
+        font-family: 'Orbitron', sans-serif;
+      }
+      #game-container {
+        width: 100vw;
+        height: 100vh;
+      }
+      #crosshair {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        z-index: 100;
+      }
+      #crosshair::before,
+      #crosshair::after {
+        content: '';
+        position: absolute;
+        background: #00ffcc;
+      }
+      #crosshair::before {
+        width: 2px;
+        height: 16px;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+      }
+      #crosshair::after {
+        width: 16px;
+        height: 2px;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+      }
+      #hud {
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        color: #00ffcc;
+        font-size: 14px;
+        z-index: 100;
+        text-shadow: 0 0 10px #00ffcc;
+      }
+      #hud .bar {
+        width: 200px;
+        height: 8px;
+        background: rgba(0, 255, 204, 0.2);
+        margin-top: 5px;
+        border: 1px solid #00ffcc;
+      }
+      #hud .bar-fill {
+        height: 100%;
+        background: #00ffcc;
+        transition: width 0.1s;
+      }
+      #instructions {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.8);
+        padding: 40px;
+        border: 2px solid #00ffcc;
+        color: #fff;
+        text-align: center;
+        z-index: 200;
+        cursor: pointer;
+      }
+      #instructions h1 {
+        font-size: 48px;
+        margin-bottom: 20px;
+        color: #00ffcc;
+        text-shadow: 0 0 20px #00ffcc;
+      }
+      #instructions p {
+        margin: 10px 0;
+        font-size: 16px;
+        opacity: 0.8;
+      }
+      #instructions .controls {
+        margin-top: 30px;
+        text-align: left;
+        font-size: 14px;
+      }
+      #instructions .controls div {
+        margin: 8px 0;
+      }
+      #instructions .key {
+        display: inline-block;
+        background: #00ffcc;
+        color: #000;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-weight: bold;
+        margin-right: 10px;
+      }
+      .hidden {
+        display: none !important;
+      }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="game-container"></div>
+    <div id="crosshair"></div>
+    <div id="hud">
+      <div>HEALTH</div>
+      <div class="bar"><div class="bar-fill" id="health-bar" style="width: 100%"></div></div>
+      <div style="margin-top: 15px">TITAN METER</div>
+      <div class="bar"><div class="bar-fill" id="titan-bar" style="width: 0%"></div></div>
+    </div>
+    <div id="instructions">
+      <h1>TITANFALL 3JS</h1>
+      <p>Click to start</p>
+      <div class="controls">
+        <div><span class="key">W A S D</span> Move</div>
+        <div><span class="key">SPACE</span> Jump / Double Jump</div>
+        <div><span class="key">SHIFT</span> Sprint</div>
+        <div><span class="key">CTRL</span> Slide (while sprinting)</div>
+        <div><span class="key">WALL RUN</span> Automatic near walls in air</div>
+        <div><span class="key">MOUSE</span> Look</div>
+        <div><span class="key">LEFT CLICK</span> Fire</div>
+        <br>
+        <div style="margin-top:10px;opacity:0.7">GAMEPAD (Ninja Layout):</div>
+        <div><span class="key">LB</span> Jump</div>
+        <div><span class="key">RB</span> Crouch/Slide</div>
+        <div><span class="key">LT</span> ADS (Aim Down Sights)</div>
+        <div><span class="key">RT</span> Fire</div>
+        <div><span class="key">L-STICK</span> Move (auto-sprint)</div>
+        <div><span class="key">R-STICK</span> Look</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

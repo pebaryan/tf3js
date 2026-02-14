@@ -30,11 +30,11 @@ function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.getElementById('game-container')!.appendChild(renderer.domElement);
 
-  const ambientLight = new THREE.AmbientLight(0x404060, 0.5);
+  const ambientLight = new THREE.AmbientLight(0x505080, 0.8);
   scene.add(ambientLight);
 
-  const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-  dirLight.position.set(50, 100, 50);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  dirLight.position.set(0, 80, -30);
   dirLight.castShadow = true;
   dirLight.shadow.mapSize.width = 2048;
   dirLight.shadow.mapSize.height = 2048;
@@ -56,12 +56,13 @@ function init() {
   player = new Player(camera, scene, world);
   scene.add(player.group);
 
-  // Create shooting targets
-  targets.push(new Target(scene, world, 0, 0, -15));   // Center target
-  targets.push(new Target(scene, world, -8, 0, -20));  // Left target
-  targets.push(new Target(scene, world, 8, 0, -20));   // Right target
-  targets.push(new Target(scene, world, -5, 2, -15));  // Elevated left
-  targets.push(new Target(scene, world, 5, 2, -15));   // Elevated right
+  // Create shooting targets in the shooting range area (z=40)
+  targets.push(new Target(scene, world, 0, 0, 45));    // Center target
+  targets.push(new Target(scene, world, -8, 0, 50));   // Left target
+  targets.push(new Target(scene, world, 8, 0, 50));    // Right target
+  targets.push(new Target(scene, world, -5, 2, 45));   // Elevated left
+  targets.push(new Target(scene, world, 5, 2, 45));    // Elevated right
+  targets.push(new Target(scene, world, 0, 4, 55));    // Far elevated target
 
   window.addEventListener('resize', onWindowResize);
 

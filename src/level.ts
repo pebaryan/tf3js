@@ -96,16 +96,27 @@ export function createLevel(scene: THREE.Scene, world: CANNON.World) {
   floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
   world.addBody(floorBody);
 
-  // === SECTION 1: WALL RUN CORRIDOR ===
-  // Long straight walls for practicing wall runs and wall jumps
-  createWall(-6, 12, -20, 0.5, 40, scene, world);  // Left wall
-  createWall(6, 12, -20, 0.5, 40, scene, world);   // Right wall
-  
+  // === SECTION 1: WALL RUN CORRIDOR (6m wide) ===
+  // Long straight walls for practicing wall runs and wall jumps (6m apart)
+  createWall(-3.25, 12, -20, 0.5, 40, scene, world);  // Left wall
+  createWall(3.25, 12, -20, 0.5, 40, scene, world);   // Right wall
+
   // Wall jump landing platforms
-  createPlatform(-10, 1, -35, 4, 0.5, 3, scene, world);
-  createPlatform(10, 1, -35, 4, 0.5, 3, scene, world);
-  createPlatform(-10, 1, -10, 4, 0.5, 3, scene, world);
-  createPlatform(10, 1, -10, 4, 0.5, 3, scene, world);
+  createPlatform(-7, 1, -35, 3, 0.5, 3, scene, world);
+  createPlatform(7, 1, -35, 3, 0.5, 3, scene, world);
+  createPlatform(-7, 1, -10, 3, 0.5, 3, scene, world);
+  createPlatform(7, 1, -10, 3, 0.5, 3, scene, world);
+
+  // === SECTION 1b: NARROW WALL RUN CORRIDOR (4m wide) ===
+  // Narrow corridor for tight wall runs (single jump only)
+  createWall(-2.25, 12, -55, 0.5, 40, scene, world);  // Left wall
+  createWall(2.25, 12, -55, 0.5, 40, scene, world);   // Right wall
+
+  // Landing platforms for narrow corridor
+  createPlatform(-6, 1, -70, 3, 0.5, 3, scene, world);
+  createPlatform(6, 1, -70, 3, 0.5, 3, scene, world);
+  createPlatform(-6, 1, -45, 3, 0.5, 3, scene, world);
+  createPlatform(6, 1, -45, 3, 0.5, 3, scene, world);
   
   // === SECTION 2: CORNER WALL RUNS ===
   // L-shaped walls for corner wall runs

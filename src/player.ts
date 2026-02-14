@@ -52,6 +52,11 @@ export class Player {
   private mantleTimer = 0;
   private mantleTarget = new THREE.Vector3();
   private wallJumpCooldown = 0;
+  private slideEndCooldown = 0;
+  private readonly SLIDE_STOP_DELAY = 0.15;
+  private needsCrouchRelease = false;
+  private canSlide = false;  // Only true after jump or sprint
+  private wasSprinting = false;
 
   private coyoteTime = 0.12;
   private coyoteTimer = 0;
@@ -230,8 +235,10 @@ export class Player {
     this.gamepadCrouchPrev = rb;
     this.gamepadCrouch = rb;
 
-    // Auto-sprint: full stick deflection
-    this.gamepadSprint = this.gamepadMove.length() > 0.85;
+    // Auto-sprint: full stick deflection (check raw axes before sensitivity scaling)
+    const rawX = gp.axes[0] ?? 0;
+    const rawY = gp.axes[1] ?? 0;
+    this.gamepadSprint = Math.sqrt(rawX * rawX + rawY * rawY) > 0.9;
     // RT = fire, LT = ADS
     this.gamepadFire = rt > 0.5;
     this.gamepadADS = lt > 0.3;
@@ -371,10 +378,13 @@ export class Player {
 
   private startSlide() {
     if (this.isSliding) return;
+    // Can only slide if enabled by jump or sprint
+    if (!this.canSlide) return;
     // Need some speed to slide – either sprinting or already moving
     if (this.isSprinting() || this.hSpeed() > 6) {
       this.isSliding = true;
       this.wantSlide = false;
+      this.canSlide = false;  // Consume slide permission
       this.slideTimer = this.SLIDE_DURATION;
       // Boost in current movement direction
       const speed = Math.max(this.hSpeed(), this.SLIDE_SPEED);
@@ -404,6 +414,7 @@ export class Player {
       this.wallJumpCooldown = 0.5; // 0.5s before can wallrun again
       this.jumpCount = 1;
       this.jumpBufferTimer = 0;
+      this.canSlide = true;  // Jump enables sliding
       return;
     }
 
@@ -414,6 +425,7 @@ export class Player {
       this.jumpCount = 1;
       this.coyoteTimer = 0;
       this.jumpBufferTimer = 0;
+      this.canSlide = true;  // Jump enables sliding
       return;
     }
 
@@ -422,6 +434,7 @@ export class Player {
       this.vel.y = this.DOUBLE_JUMP;
       this.jumpCount = 2;
       this.jumpBufferTimer = 0;
+      this.canSlide = true;  // Jump enables sliding
     }
   }
 
@@ -439,6 +452,11 @@ export class Player {
   }
 
   private move(dt: number) {
+    // Clear crouch release requirement when player actually releases crouch
+    if (this.needsCrouchRelease && !this.isCrouching()) {
+      this.needsCrouchRelease = false;
+    }
+
     const wasGrounded = this.isGrounded;
     this.isGrounded = this.checkGrounded();
 
@@ -463,9 +481,12 @@ export class Player {
     }
 
     // --- Wall run detection FIRST (before jump) ---
-    // Decrement cooldown
+    // Decrement cooldowns
     if (this.wallJumpCooldown > 0) {
       this.wallJumpCooldown -= dt;
+    }
+    if (this.slideEndCooldown > 0) {
+      this.slideEndCooldown -= dt;
     }
     const wall = this.checkWall();
     // Can only start wallrun if cooldown has expired
@@ -535,52 +556,89 @@ export class Player {
     } else if (this.isSliding) {
       // ---- SLIDE ----
       this.slideTimer -= dt;
-      if (this.slideTimer <= 0 || !this.isCrouching()) {
+
+      // Stronger friction when slide timer expires but still crouching
+      const slideExpired = this.slideTimer <= 0;
+      const decayRate = slideExpired ? this.SLIDE_DECAY * 10 : this.SLIDE_DECAY;
+
+      if (slideExpired || !this.isCrouching()) {
         this.isSliding = false;
+        // Full stop when slide ends
+        this.vel.x = 0;
+        this.vel.z = 0;
+        this.slideEndCooldown = this.SLIDE_STOP_DELAY;
+        // Must release crouch before moving again
+        this.needsCrouchRelease = this.isCrouching();
+        return;
       }
-      // Gentle speed decay
+
+      // Speed decay with minimum threshold
       const speed = this.hSpeed();
-      const newSpeed = Math.max(speed - this.SLIDE_DECAY * dt, 0);
+      const minSlideSpeed = 4;
+      const newSpeed = Math.max(speed - decayRate * dt, minSlideSpeed);
+
       if (speed > 0.1) {
         const ratio = newSpeed / speed;
         this.vel.x *= ratio;
         this.vel.z *= ratio;
       }
+
       // Keep grounded
       if (this.vel.y < 0) this.vel.y = 0;
 
     } else if (this.isWallRunning) {
       // ---- WALL RUN ----
       this.wallRunTimer += dt;
-      const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.euler.y);
-      fwd.y = 0; fwd.normalize();
-      this.vel.x = fwd.x * this.WALL_RUN_SPEED;
-      this.vel.z = fwd.z * this.WALL_RUN_SPEED;
+      const wish = this.wishDir();
+      if (wish.length() > 0) {
+        // Move in input direction at wallrun speed
+        this.vel.x = wish.x * this.WALL_RUN_SPEED;
+        this.vel.z = wish.z * this.WALL_RUN_SPEED;
+      } else {
+        // No input - continue forward along wall
+        const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.euler.y);
+        fwd.y = 0; fwd.normalize();
+        this.vel.x = fwd.x * this.WALL_RUN_SPEED;
+        this.vel.z = fwd.z * this.WALL_RUN_SPEED;
+      }
       this.vel.y = this.WALL_RUN_GRAVITY * this.wallRunTimer; // gradual sag
 
     } else if (this.isGrounded) {
       // ---- GROUND ----
-      const target = this.isSprinting() ? this.SPRINT_SPEED : this.GROUND_SPEED;
-      if (wishMove.length() > 0) {
-        // Accelerate toward wish direction
-        const currentSpeed = new THREE.Vector3(this.vel.x, 0, this.vel.z).dot(wishMove);
-        const addSpeed = target - currentSpeed;
-        if (addSpeed > 0) {
-          const accel = Math.min(this.GROUND_ACCEL * dt, addSpeed);
-          this.vel.x += wishMove.x * accel;
-          this.vel.z += wishMove.z * accel;
-        }
-        // Clamp to target
-        const hs = this.hSpeed();
-        if (hs > target) {
-          const s = target / hs;
-          this.vel.x *= s;
-          this.vel.z *= s;
-        }
-      } else {
-        // No input – stop immediately
+      // Detect sprint start to enable sliding
+      const isSprinting = this.isSprinting();
+      if (isSprinting && !this.wasSprinting && wishMove.length() > 0) {
+        this.canSlide = true;  // Sprint start enables sliding
+      }
+      this.wasSprinting = isSprinting;
+
+      // Block movement briefly after slide ends, or until crouch is released
+      if (this.slideEndCooldown > 0 || this.needsCrouchRelease) {
         this.vel.x = 0;
         this.vel.z = 0;
+      } else {
+        const target = isSprinting ? this.SPRINT_SPEED : this.GROUND_SPEED;
+        if (wishMove.length() > 0) {
+          // Accelerate toward wish direction
+          const currentSpeed = new THREE.Vector3(this.vel.x, 0, this.vel.z).dot(wishMove);
+          const addSpeed = target - currentSpeed;
+          if (addSpeed > 0) {
+            const accel = Math.min(this.GROUND_ACCEL * dt, addSpeed);
+            this.vel.x += wishMove.x * accel;
+            this.vel.z += wishMove.z * accel;
+          }
+          // Clamp to target
+          const hs = this.hSpeed();
+          if (hs > target) {
+            const s = target / hs;
+            this.vel.x *= s;
+            this.vel.z *= s;
+          }
+        } else {
+          // No input – stop immediately
+          this.vel.x = 0;
+          this.vel.z = 0;
+        }
       }
       // Clamp downward velocity on ground
       if (this.vel.y < 0) this.vel.y = 0;
@@ -689,52 +747,58 @@ export class Player {
     const bulletSpeed = 120; // m/s - realistic rifle speed
     const gravity = Math.abs(this.BULLET_GRAVITY);
     
-    // Cast ray from camera to find crosshair point
+    // Cast ray from camera to find where crosshair points
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
     const intersects = raycaster.intersectObjects(this.getMeshes());
     
-    // Determine target point - either where crosshair hits, or a point at distance
+    // Determine target point
     let targetPoint: THREE.Vector3;
-    if (intersects.length > 0 && intersects[0].distance < 100) {
+    if (intersects.length > 0 && intersects[0].distance < 200) {
       targetPoint = intersects[0].point;
     } else {
-      // Default target at 30m distance along crosshair
+      // Default target at 50m
       const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-      targetPoint = this.camera.position.clone().add(fwd.multiplyScalar(30));
+      targetPoint = this.camera.position.clone().add(fwd.multiplyScalar(50));
     }
     
-    // Calculate ballistic trajectory to hit target
-    const startPos = this.group.position.clone().add(
-      new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion).multiplyScalar(0.5)
-    );
+    // Start position at gun barrel
+    const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    const startPos = this.group.position.clone().add(aimDir.clone().multiplyScalar(0.5));
+    
+    // Calculate trajectory to hit target
     const displacement = targetPoint.clone().sub(startPos);
     const horizontalDist = Math.sqrt(displacement.x * displacement.x + displacement.z * displacement.z);
     const verticalDist = displacement.y;
     
-    // Calculate launch angle to hit target
-    // Using the ballistic trajectory equation
-    const discriminant = bulletSpeed * bulletSpeed * bulletSpeed * bulletSpeed - 
+    // Calculate launch angle using ballistic trajectory
+    // Quadratic formula for tan(theta)
+    const discriminant = (bulletSpeed * bulletSpeed * bulletSpeed * bulletSpeed) - 
                         gravity * (gravity * horizontalDist * horizontalDist + 2 * verticalDist * bulletSpeed * bulletSpeed);
     
-    let launchAngle = 0;
-    if (discriminant >= 0) {
-      // Two solutions - use the lower angle (direct shot) when possible
-      const tanTheta1 = (bulletSpeed * bulletSpeed + Math.sqrt(discriminant)) / (gravity * horizontalDist);
-      const tanTheta2 = (bulletSpeed * bulletSpeed - Math.sqrt(discriminant)) / (gravity * horizontalDist);
-      const angle1 = Math.atan(tanTheta1);
-      const angle2 = Math.atan(tanTheta2);
-      // Choose the shallower angle (more direct) unless it's too steep
-      launchAngle = Math.abs(angle1) < Math.abs(angle2) ? angle1 : angle2;
-    }
+    let velocity: THREE.Vector3;
     
-    // Build velocity vector
-    const horizontalDir = new THREE.Vector3(displacement.x, 0, displacement.z).normalize();
-    const velocity = new THREE.Vector3(
-      horizontalDir.x * Math.cos(launchAngle) * bulletSpeed,
-      Math.sin(launchAngle) * bulletSpeed,
-      horizontalDir.z * Math.cos(launchAngle) * bulletSpeed
-    );
+    if (discriminant >= 0 && horizontalDist > 0.1) {
+      // Use the lower angle solution for flatter trajectory
+      const tanTheta = (bulletSpeed * bulletSpeed - Math.sqrt(discriminant)) / (gravity * horizontalDist);
+      const launchAngle = Math.atan(tanTheta);
+      
+      // Only compensate if angle is reasonable (less than 15 degrees)
+      if (Math.abs(launchAngle) < Math.PI / 12) {
+        const horizontalDir = new THREE.Vector3(displacement.x, 0, displacement.z).normalize();
+        velocity = new THREE.Vector3(
+          horizontalDir.x * Math.cos(launchAngle) * bulletSpeed,
+          Math.sin(launchAngle) * bulletSpeed,
+          horizontalDir.z * Math.cos(launchAngle) * bulletSpeed
+        );
+      } else {
+        // Angle too steep, shoot straight
+        velocity = aimDir.clone().multiplyScalar(bulletSpeed);
+      }
+    } else {
+      // No solution, shoot straight
+      velocity = aimDir.clone().multiplyScalar(bulletSpeed);
+    }
     
     // Create bullet mesh
     const geo = new THREE.CapsuleGeometry(0.02, 0.08, 4, 8);
@@ -742,7 +806,7 @@ export class Player {
     const bullet = new THREE.Mesh(geo, mat);
     
     bullet.position.copy(startPos);
-    // Orient to velocity
+    // Orient bullet to face velocity
     if (velocity.length() > 0.1) {
       const lookTarget = startPos.clone().add(velocity);
       bullet.lookAt(lookTarget);
@@ -807,11 +871,14 @@ export class Player {
     }
     const hs = this.hSpeed();
     const state = this.isMantling ? 'MANTLE' : this.isSliding ? 'SLIDE' : this.isWallRunning ? 'WALLRUN' : this.isGrounded ? 'GROUND' : 'AIR';
+    const isSprinting = this.isSprinting();
+    const sprintStatus = isSprinting ? 'ON' : 'off';
+    const sprintColor = isSprinting ? '#00ff00' : '#888888';
     el.innerHTML =
       `Speed: ${hs.toFixed(1)}<br>` +
       `State: ${state}<br>` +
       `Vel: ${this.vel.x.toFixed(1)}, ${this.vel.y.toFixed(1)}, ${this.vel.z.toFixed(1)}<br>` +
       `Jumps: ${this.jumpCount}<br>` +
-      `Sprint: ${this.isSprinting()} Crouch: ${this.isCrouching()}`;
+      `<span style="color:${sprintColor}">SPRINT: ${sprintStatus}</span> | Crouch: ${this.isCrouching()}`;
   }
 }

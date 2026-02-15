@@ -2,6 +2,12 @@
 
 A browser-based 3D first-person shooter inspired by Titanfall, built with Three.js and Cannon.js physics engine.
 
+## Demo
+
+[![Watch the demo](https://img.youtube.com/vi/l3LYOUOZzCk/0.jpg)](https://www.youtube.com/watch?v=l3LYOUOZzCk)
+
+Click the image above to watch a gameplay demo on YouTube.
+
 ## Features
 
 - **First-person shooter gameplay** with smooth movement and aiming

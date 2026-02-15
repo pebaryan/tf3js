@@ -57,6 +57,10 @@ export class Player {
   private needsCrouchRelease = false;
   private canSlide = false;  // Only true after jump or sprint
   private wasSprinting = false;
+  private wasJumping = false;
+  private wasSliding = false;
+  private wasWallRunning = false;
+  private wasMantling = false;
 
   private coyoteTime = 0.12;
   private coyoteTimer = 0;
@@ -99,8 +103,8 @@ export class Player {
   private gamepadADS = false;
 
   // --- combat ---
-  private health = 100;
-  private titanMeter = 0;
+  health = 100;
+  titanMeter = 0;
   private lastShotTime = 0;
   private bullets: { 
     mesh: THREE.Mesh; 
@@ -661,6 +665,38 @@ export class Player {
 
   /** Write our velocity into cannon body so collision resolution uses it. */
   private applyVelocity() {
+    // Play jump sound when jumping
+    if (this.vel.y > 0.1 && !this.wasJumping) {
+      import('./sound').then(({ soundManager }) => {
+        soundManager.playSound('jump');
+      });
+    }
+    this.wasJumping = this.vel.y > 0.1;
+    
+    // Play slide sound when starting slide
+    if (this.isSliding && !this.wasSliding) {
+      import('./sound').then(({ soundManager }) => {
+        soundManager.playSound('slide');
+      });
+    }
+    this.wasSliding = this.isSliding;
+    
+    // Play wall run sound when starting wall run
+    if (this.isWallRunning && !this.wasWallRunning) {
+      import('./sound').then(({ soundManager }) => {
+        soundManager.playSound('wallrun');
+      });
+    }
+    this.wasWallRunning = this.isWallRunning;
+    
+    // Play mantle sound
+    if (this.isMantling && !this.wasMantling) {
+      import('./sound').then(({ soundManager }) => {
+        soundManager.playSound('mantle');
+      });
+    }
+    this.wasMantling = this.isMantling;
+    
     this.body.velocity.set(this.vel.x, this.vel.y, this.vel.z);
     // Sync Three.js group from cannon position
     this.group.position.set(this.body.position.x, this.body.position.y, this.body.position.z);
@@ -740,6 +776,19 @@ export class Player {
         (b.trail.material as THREE.LineBasicMaterial).dispose();
         this.bullets.splice(i, 1); 
       }
+    }
+  }
+
+  takeDamage(amount: number) {
+    this.health = Math.max(0, this.health - amount);
+    if (this.health <= 0) {
+      // Respawn after death
+      setTimeout(() => {
+        this.body.position.set(0, 5, 0);
+        this.vel.set(0, 0, 0);
+        this.body.velocity.set(0, 0, 0);
+        this.health = 100;
+      }, 2000);
     }
   }
 

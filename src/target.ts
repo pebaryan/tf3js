@@ -15,7 +15,7 @@ export class Target {
   body: CANNON.Body;
   
   private maxHealth = 100;
-  private health = 100;
+  health = 100;
   private healthBar: THREE.Mesh;
   private healthBarBg: THREE.Mesh;
   private damageNumbers: DamageNumber[] = [];

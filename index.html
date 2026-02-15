@@ -118,34 +118,80 @@
   <body>
     <div id="game-container"></div>
     <div id="crosshair"></div>
-    <div id="hud">
-      <div>HEALTH</div>
-      <div class="bar"><div class="bar-fill" id="health-bar" style="width: 100%"></div></div>
-      <div style="margin-top: 15px">TITAN METER</div>
-      <div class="bar"><div class="bar-fill" id="titan-bar" style="width: 0%"></div></div>
-    </div>
-    <div id="instructions">
-      <h1>TITANFALL 3JS</h1>
-      <p>Click or press START to begin</p>
-      <div class="controls">
-        <div><span class="key">W A S D</span> Move</div>
-        <div><span class="key">SPACE</span> Jump / Double Jump</div>
-        <div><span class="key">SHIFT</span> Sprint</div>
-        <div><span class="key">CTRL</span> Slide (while sprinting)</div>
-        <div><span class="key">WALL RUN</span> Automatic near walls in air</div>
-        <div><span class="key">MOUSE</span> Look</div>
-        <div><span class="key">LEFT CLICK</span> Fire</div>
-        <br>
-        <div style="margin-top:10px;opacity:0.7">GAMEPAD (Ninja Layout):</div>
-        <div><span class="key">START</span> Start Game</div>
-        <div><span class="key">LB</span> Jump</div>
-        <div><span class="key">RB</span> Crouch/Slide</div>
-        <div><span class="key">LT</span> ADS (Aim Down Sights)</div>
-        <div><span class="key">RT</span> Fire</div>
-        <div><span class="key">L-STICK</span> Move (auto-sprint)</div>
-        <div><span class="key">R-STICK</span> Look</div>
-      </div>
-    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
+
+<style>
+  .menu-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 200;
+    color: #00ffcc;
+  }
+  
+  .menu-content {
+    text-align: center;
+    background: rgba(10, 10, 30, 0.8);
+    padding: 50px;
+    border: 2px solid #00ffcc;
+    border-radius: 10px;
+    box-shadow: 0 0 30px rgba(0, 255, 204, 0.3);
+  }
+  
+  .menu-content h1 {
+    font-size: 48px;
+    margin-bottom: 20px;
+    color: #00ffcc;
+    text-shadow: 0 0 20px #00ffcc;
+  }
+  
+  .menu-button {
+    display: block;
+    width: 250px;
+    padding: 12px;
+    margin: 10px auto;
+    font-size: 18px;
+    background: #00ffcc;
+    color: #000;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: 'Orbitron', sans-serif;
+    font-weight: bold;
+  }
+  
+  .menu-button:hover {
+    background: #00ccaa;
+    transform: scale(1.05);
+    box-shadow: 0 0 15px rgba(0, 255, 204, 0.5);
+  }
+  
+  .menu-button:active {
+    transform: scale(0.98);
+  }
+  
+  #level-list {
+    margin: 20px 0;
+    max-height: 300px;
+    overflow-y: auto;
+    text-align: left;
+  }
+  
+  #level-list .menu-button {
+    width: 100%;
+    margin: 5px 0;
+  }
+  
+  #level-list .menu-button:hover {
+    background: #00ccaa;
+  }
+</style>

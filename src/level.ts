@@ -83,7 +83,8 @@ const slideRampMaterial = new THREE.MeshStandardMaterial({
   roughness: 0.5,
 });
 
-export function createLevel(scene: THREE.Scene, world: CANNON.World) {
+export function createLevel(scene: THREE.Scene, world: CANNON.World, levelConfig?: { layout: string, type: string }) {
+  const config = levelConfig || { layout: 'open', type: 'training' };
   const floorGeo = new THREE.PlaneGeometry(200, 200);
   const floor = new THREE.Mesh(floorGeo, floorMaterial);
   floor.rotation.x = -Math.PI / 2;
@@ -204,8 +205,50 @@ export function createLevel(scene: THREE.Scene, world: CANNON.World) {
   createWall(80, 5, 0, 0.5, 200, scene, world);
   createWall(0, 5, 80, 200, 10, scene, world);
   
+  // Level-specific additions
+  if (config.type === 'capture') {
+    // Create capture point platforms
+    createPlatform(-15, 0.5, 30, 6, 0.5, 6, scene, world);
+    createPlatform(0, 0.5, 30, 6, 0.5, 6, scene, world);
+    createPlatform(15, 0.5, 30, 6, 0.5, 6, scene, world);
+  } else if (config.type === 'race') {
+    // Create race finish line
+    const finishGeo = new THREE.BoxGeometry(10, 0.5, 6);
+    const finishMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc, emissive: 0x00ffcc, emissiveIntensity: 0.5 });
+    const finish = new THREE.Mesh(finishGeo, finishMat);
+    finish.position.set(0, 2.5, -85);
+    finish.castShadow = true;
+    finish.receiveShadow = true;
+    scene.add(finish);
+    
+    // Add finish sign
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, 256, 128);
+    ctx.fillStyle = '#00ffcc';
+    ctx.font = 'bold 32px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('FINISH', 128, 64);
+    
+    const tex = new THREE.CanvasTexture(canvas);
+    const signGeo = new THREE.PlaneGeometry(8, 4);
+    const signMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+    const sign = new THREE.Mesh(signGeo, signMat);
+    sign.position.set(0, 5, -85);
+    scene.add(sign);
+  } else if (config.type === 'survival') {
+    // Create survival arena with higher walls
+    createWall(-20, 8, -20, 0.5, 60, scene, world);
+    createWall(20, 8, -20, 0.5, 60, scene, world);
+    createWall(0, 8, -60, 40, 0.5, scene, world);
+  }
+  
   addAccentLines(scene);
-  addSignage(scene);
+  addSignage(scene, config.type);
 }
 
 function makeBoxMaterial(w: number, h: number, d: number, baseMat: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial[] {
@@ -306,24 +349,32 @@ function createDistanceMarker(x: number, y: number, z: number, text: string, sce
   scene.add(mesh);
 }
 
-function addSignage(scene: THREE.Scene) {
-  // Wall Run sign
-  createSign(0, 3, -5, "WALL RUN\nCORRIDOR", 0, scene);
-  
-  // Mantle sign
-  createSign(-30, 3, 10, "MANTLE\nPRACTICE", 0, scene);
-  
-  // Slide sign
-  createSign(0, 3, 5, "SLIDE\nRAMPS", 0, scene);
-  
-  // Parkour sign
-  createSign(30, 3, 10, "PLATFORM\nPARKOUR", 0, scene);
-  
-  // Sprint sign
-  createSign(-40, 3, 5, "SPRINT\nCOURSE", Math.PI / 2, scene);
-  
-  // Targets sign
-  createSign(0, 3, 35, "SHOOTING\nRANGE", 0, scene);
+function addSignage(scene: THREE.Scene, levelType: string) {
+  if (levelType === 'training') {
+    // Wall Run sign
+    createSign(0, 3, -5, "WALL RUN\nCORRIDOR", 0, scene);
+    
+    // Mantle sign
+    createSign(-30, 3, 10, "MANTLE\nPRACTICE", 0, scene);
+    
+    // Slide sign
+    createSign(0, 3, 5, "SLIDE\nRAMPS", 0, scene);
+    
+    // Parkour sign
+    createSign(30, 3, 10, "PLATFORM\nPARKOUR", 0, scene);
+    
+    // Sprint sign
+    createSign(-40, 3, 5, "SPRINT\nCOURSE", Math.PI / 2, scene);
+    
+    // Targets sign
+    createSign(0, 3, 35, "SHOOTING\nRANGE", 0, scene);
+  } else if (levelType === 'capture') {
+    createSign(0, 3, 35, "CAPTURE\nPOINTS", 0, scene);
+  } else if (levelType === 'race') {
+    createSign(0, 3, 35, "RACE\nCOURSE", 0, scene);
+  } else if (levelType === 'survival') {
+    createSign(0, 3, 35, "SURVIVAL\nARENA", 0, scene);
+  }
 }
 
 function createSign(x: number, y: number, z: number, text: string, rotation: number, scene: THREE.Scene) {

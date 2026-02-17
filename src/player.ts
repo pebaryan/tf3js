@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import * as CANNON from "cannon-es";
 import { getBindings } from "./keybindings";
+import { Weapon, R201_WEAPON } from "./weapons";
+import { BallisticsSystem, Bullet } from "./ballistics";
+import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG } from "./effects";
 
 interface KeyState {
   forward: boolean;
@@ -12,19 +15,6 @@ interface KeyState {
   crouch: boolean;
   fire: boolean;
   embark: boolean;
-}
-
-interface BulletImpactParticle {
-  mesh: THREE.Mesh;
-  velocity: THREE.Vector3;
-  life: number;
-  maxLife: number;
-}
-
-interface BulletImpactFlash {
-  mesh: THREE.Mesh;
-  life: number;
-  maxLife: number;
 }
 
 /**
@@ -131,17 +121,10 @@ export class Player {
   health = 100;
   titanMeter = 0;
   private lastShotTime = 0;
-  private bullets: {
-    mesh: THREE.Mesh;
-    trail: THREE.Line;
-    trailPositions: THREE.Vector3[];
-    maxTrailLength: number;
-    velocity: THREE.Vector3;
-    time: number;
-  }[] = [];
-  private impactParticles: BulletImpactParticle[] = [];
-  private impactFlashes: BulletImpactFlash[] = [];
-  private readonly BULLET_GRAVITY = -35;
+  private bullets: Bullet[] = [];
+  private ballisticsSystem!: BallisticsSystem;
+  private impactRenderer!: ImpactEffectsRenderer;
+  private activeWeapon: Weapon = R201_WEAPON;
 
   // cannon body (collision only)
   body: CANNON.Body;
@@ -171,6 +154,8 @@ export class Player {
 
     this.setupControls();
     this.createWeapon();
+    this.ballisticsSystem = new BallisticsSystem(this.scene);
+    this.impactRenderer = new ImpactEffectsRenderer(this.scene);
   }
 
   /* ------------------------------------------------------------------ */
@@ -530,115 +515,6 @@ export class Player {
     ) as THREE.Mesh[];
   }
 
-  private isPlayerPart(obj: THREE.Object3D): boolean {
-    let current: THREE.Object3D | null = obj;
-    while (current) {
-      if (current === this.group) return true;
-      current = current.parent;
-    }
-    return false;
-  }
-
-  private getBulletCollisionMeshes(): THREE.Mesh[] {
-    return this.scene.children.filter((o) => {
-      if (!(o instanceof THREE.Mesh)) return false;
-      if (this.isPlayerPart(o)) return false;
-      if (this.bullets.some((b) => b.mesh === o)) return false;
-      const mat = o.material;
-      if (Array.isArray(mat)) {
-        if (mat.some((m) => (m as THREE.Material).transparent)) return false;
-      } else if ((mat as THREE.Material).transparent) {
-        return false;
-      }
-      return true;
-    }) as THREE.Mesh[];
-  }
-
-  private createBulletImpact(point: THREE.Vector3, normal: THREE.Vector3): void {
-    const n = normal.lengthSq() > 1e-6 ? normal.clone().normalize() : new THREE.Vector3(0, 1, 0);
-
-    const flashGeo = new THREE.RingGeometry(0.04, 0.16, 16);
-    const flashMat = new THREE.MeshBasicMaterial({
-      color: 0x66ddff,
-      transparent: true,
-      opacity: 0.85,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    const flash = new THREE.Mesh(flashGeo, flashMat);
-    flash.position.copy(point).add(n.clone().multiplyScalar(0.02));
-    flash.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-    this.scene.add(flash);
-    this.impactFlashes.push({ mesh: flash, life: 0.1, maxLife: 0.1 });
-
-    const sparkCount = 8 + Math.floor(Math.random() * 5);
-    for (let i = 0; i < sparkCount; i++) {
-      const size = 0.012 + Math.random() * 0.018;
-      const sparkGeo = new THREE.SphereGeometry(size, 4, 4);
-      const sparkMat = new THREE.MeshBasicMaterial({
-        color: 0x88eeff,
-        transparent: true,
-        opacity: 1,
-        depthWrite: false,
-      });
-      const spark = new THREE.Mesh(sparkGeo, sparkMat);
-      spark.position.copy(point);
-
-      const rand = new THREE.Vector3(
-        (Math.random() - 0.5) * 1.6,
-        Math.random() * 1.2,
-        (Math.random() - 0.5) * 1.6,
-      );
-      const dir = n.clone().multiplyScalar(0.9).add(rand).normalize();
-      const speed = 5 + Math.random() * 10;
-
-      this.scene.add(spark);
-      this.impactParticles.push({
-        mesh: spark,
-        velocity: dir.multiplyScalar(speed),
-        life: 0.15 + Math.random() * 0.2,
-        maxLife: 0.35,
-      });
-    }
-  }
-
-  private updateBulletImpactEffects(delta: number): void {
-    for (let i = this.impactParticles.length - 1; i >= 0; i--) {
-      const p = this.impactParticles[i];
-      p.life -= delta;
-      p.velocity.y -= 16 * delta;
-      p.mesh.position.add(p.velocity.clone().multiplyScalar(delta));
-      p.mesh.scale.multiplyScalar(0.98);
-      (p.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(
-        0,
-        p.life / p.maxLife,
-      );
-
-      if (p.life <= 0) {
-        this.scene.remove(p.mesh);
-        p.mesh.geometry.dispose();
-        (p.mesh.material as THREE.Material).dispose();
-        this.impactParticles.splice(i, 1);
-      }
-    }
-
-    for (let i = this.impactFlashes.length - 1; i >= 0; i--) {
-      const f = this.impactFlashes[i];
-      f.life -= delta;
-      f.mesh.scale.multiplyScalar(1 + 8 * delta);
-      (f.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(
-        0,
-        f.life / f.maxLife,
-      );
-
-      if (f.life <= 0) {
-        this.scene.remove(f.mesh);
-        f.mesh.geometry.dispose();
-        (f.mesh.material as THREE.Material).dispose();
-        this.impactFlashes.splice(i, 1);
-      }
-    }
-  }
 
   private checkGrounded(): boolean {
     const from = new THREE.Vector3(
@@ -1383,54 +1259,16 @@ export class Player {
         this.lastShotTime = now;
       }
     }
-    const worldMeshes = this.getBulletCollisionMeshes();
+
+    const worldMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
+
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
-      b.time += delta;
-
-      // Apply gravity to bullet
-      b.velocity.y += this.BULLET_GRAVITY * delta;
-
-      // Update position
       const prevPos = b.mesh.position.clone();
-      const step = b.velocity.clone().multiplyScalar(delta);
-      b.mesh.position.add(step);
+      this.ballisticsSystem.updateBullet(b, delta);
+      const step = b.mesh.position.clone().sub(prevPos);
 
-      // Orient bullet to face velocity direction
-      if (b.velocity.length() > 0.1) {
-        const lookTarget = b.mesh.position.clone().add(b.velocity);
-        b.mesh.lookAt(lookTarget);
-      }
-
-      // Update trail
-      b.trailPositions.unshift(b.mesh.position.clone());
-      if (b.trailPositions.length > b.maxTrailLength) {
-        b.trailPositions.pop();
-      }
-
-      // Update trail geometry
-      if (b.trailPositions.length >= 2) {
-        const positions: number[] = [];
-        for (const pos of b.trailPositions) {
-          positions.push(pos.x, pos.y, pos.z);
-        }
-        b.trail.geometry.setAttribute(
-          "position",
-          new THREE.Float32BufferAttribute(positions, 3),
-        );
-        (
-          b.trail.geometry as THREE.BufferGeometry
-        ).attributes.position.needsUpdate = true;
-
-        // Fade trail based on age
-        const alpha = 1 - b.time / 3;
-        (b.trail.material as THREE.LineBasicMaterial).opacity = Math.max(
-          0,
-          alpha * 0.5,
-        );
-      }
-
-      // Check target hits
+      // Hit detection
       let hit = false;
       const stepLen = step.length();
       if (stepLen > 1e-6) {
@@ -1442,18 +1280,19 @@ export class Player {
           const normal = wallHit.face
             ? wallHit.face.normal.clone().transformDirection((wallHit.object as THREE.Mesh).matrixWorld)
             : step.clone().normalize().negate();
-          this.createBulletImpact(wallHit.point, normal);
+          this.impactRenderer.spawnImpact(wallHit.point, normal, PLAYER_IMPACT_CONFIG);
           hit = true;
         }
       }
 
-      if (targets) {
+      if (!hit && targets) {
         for (const target of targets) {
           if (target.checkBulletHit && target.checkBulletHit(b.mesh.position)) {
-            target.takeDamage(25, b.mesh.position);
-            this.createBulletImpact(
+            target.takeDamage(this.activeWeapon.damage, b.mesh.position);
+            this.impactRenderer.spawnImpact(
               b.mesh.position.clone(),
               b.velocity.clone().normalize().negate(),
+              PLAYER_IMPACT_CONFIG,
             );
             hit = true;
             break;
@@ -1461,14 +1300,14 @@ export class Player {
         }
       }
 
-      // Check enemy hits
       if (!hit && enemies) {
         for (const enemy of enemies) {
           if (enemy.checkBulletHit && enemy.checkBulletHit(b.mesh.position)) {
-            enemy.takeDamage(25, b.mesh.position);
-            this.createBulletImpact(
+            enemy.takeDamage(this.activeWeapon.damage, b.mesh.position);
+            this.impactRenderer.spawnImpact(
               b.mesh.position.clone(),
               b.velocity.clone().normalize().negate(),
+              PLAYER_IMPACT_CONFIG,
             );
             hit = true;
             break;
@@ -1476,15 +1315,13 @@ export class Player {
         }
       }
 
-      if (hit || b.time > 3 || b.mesh.position.y < -5) {
-        this.scene.remove(b.mesh);
-        this.scene.remove(b.trail);
-        b.trail.geometry.dispose();
-        (b.trail.material as THREE.LineBasicMaterial).dispose();
+      if (hit || b.time > b.maxLifetime || b.mesh.position.y < -5) {
+        this.ballisticsSystem.disposeBullet(b);
         this.bullets.splice(i, 1);
       }
     }
-    this.updateBulletImpactEffects(delta);
+
+    this.impactRenderer.update(delta);
   }
 
   takeDamage(amount: number) {
@@ -1501,8 +1338,7 @@ export class Player {
   }
 
   private shoot() {
-    const bulletSpeed = 120; // m/s - realistic rifle speed
-    const gravity = Math.abs(this.BULLET_GRAVITY);
+    const weapon = this.activeWeapon;
 
     // Cast ray from camera to find where crosshair points
     const raycaster = new THREE.Raycaster();
@@ -1514,7 +1350,6 @@ export class Player {
     if (intersects.length > 0 && intersects[0].distance < 200) {
       targetPoint = intersects[0].point;
     } else {
-      // Default target at 50m
       const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(
         this.camera.quaternion,
       );
@@ -1529,84 +1364,18 @@ export class Player {
       .clone()
       .add(aimDir.clone().multiplyScalar(0.5));
 
-    // Calculate trajectory to hit target
-    const displacement = targetPoint.clone().sub(startPos);
-    const horizontalDist = Math.sqrt(
-      displacement.x * displacement.x + displacement.z * displacement.z,
+    // Calculate velocity with ballistic arc compensation
+    const velocity = BallisticsSystem.calculateParabolicVelocity(
+      startPos,
+      targetPoint,
+      weapon.bulletSpeed,
+      Math.abs(weapon.bulletVisuals.gravity),
+      aimDir,
     );
-    const verticalDist = displacement.y;
 
-    // Calculate launch angle using ballistic trajectory
-    // Quadratic formula for tan(theta)
-    const discriminant =
-      bulletSpeed * bulletSpeed * bulletSpeed * bulletSpeed -
-      gravity *
-        (gravity * horizontalDist * horizontalDist +
-          2 * verticalDist * bulletSpeed * bulletSpeed);
+    const bullet = this.ballisticsSystem.createBullet(startPos, velocity, weapon.bulletVisuals);
+    this.bullets.push(bullet);
 
-    let velocity: THREE.Vector3;
-
-    if (discriminant >= 0 && horizontalDist > 0.1) {
-      // Use the lower angle solution for flatter trajectory
-      const tanTheta =
-        (bulletSpeed * bulletSpeed - Math.sqrt(discriminant)) /
-        (gravity * horizontalDist);
-      const launchAngle = Math.atan(tanTheta);
-
-      // Only compensate if angle is reasonable (less than 15 degrees)
-      if (Math.abs(launchAngle) < Math.PI / 12) {
-        const horizontalDir = new THREE.Vector3(
-          displacement.x,
-          0,
-          displacement.z,
-        ).normalize();
-        velocity = new THREE.Vector3(
-          horizontalDir.x * Math.cos(launchAngle) * bulletSpeed,
-          Math.sin(launchAngle) * bulletSpeed,
-          horizontalDir.z * Math.cos(launchAngle) * bulletSpeed,
-        );
-      } else {
-        // Angle too steep, shoot straight
-        velocity = aimDir.clone().multiplyScalar(bulletSpeed);
-      }
-    } else {
-      // No solution, shoot straight
-      velocity = aimDir.clone().multiplyScalar(bulletSpeed);
-    }
-
-    // Create bullet mesh
-    const geo = new THREE.CapsuleGeometry(0.02, 0.08, 4, 8);
-    const mat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
-    const bullet = new THREE.Mesh(geo, mat);
-
-    bullet.position.copy(startPos);
-    // Orient bullet to face velocity
-    if (velocity.length() > 0.1) {
-      const lookTarget = startPos.clone().add(velocity);
-      bullet.lookAt(lookTarget);
-      bullet.rotateX(Math.PI / 2);
-    }
-    this.scene.add(bullet);
-
-    // Create trail
-    const trailGeo = new THREE.BufferGeometry();
-    const trailMat = new THREE.LineBasicMaterial({
-      color: 0x00ffcc,
-      transparent: true,
-      opacity: 0.5,
-      linewidth: 2,
-    });
-    const trail = new THREE.Line(trailGeo, trailMat);
-    this.scene.add(trail);
-
-    this.bullets.push({
-      mesh: bullet,
-      trail,
-      trailPositions: [bullet.position.clone()],
-      maxTrailLength: 20,
-      velocity: velocity,
-      time: 0,
-    });
     this.titanMeter = Math.min(100, this.titanMeter + 0.5);
     if (this.onTitanMeterChange) {
       this.onTitanMeterChange(this.titanMeter);

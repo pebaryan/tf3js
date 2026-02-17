@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+import { BallisticsSystem, Bullet } from './ballistics';
+import { ImpactEffectsRenderer, TITAN_IMPACT_CONFIG } from './effects';
+import { TITAN_WEAPON } from './weapons';
 
 type TitanBulletTarget = {
   checkBulletHit: (bulletPos: THREE.Vector3) => boolean;
@@ -10,19 +13,6 @@ type TitanBulletEnemy = {
   checkBulletHit: (bulletPos: THREE.Vector3) => boolean;
   takeDamage: (amount: number, hitPoint?: THREE.Vector3) => void;
 };
-
-interface ImpactParticle {
-  mesh: THREE.Mesh;
-  velocity: THREE.Vector3;
-  life: number;
-  maxLife: number;
-}
-
-interface ImpactFlash {
-  mesh: THREE.Mesh;
-  life: number;
-  maxLife: number;
-}
 
 export enum TitanState {
   INACTIVE = 'inactive',
@@ -68,8 +58,7 @@ export class Titan {
   dropSpeed: number = 80;
   landingAnimation: number = 0;
   smokeParticles: THREE.Mesh[] = [];
-  impactParticles: ImpactParticle[] = [];
-  impactFlashes: ImpactFlash[] = [];
+  private impactRenderer!: ImpactEffectsRenderer;
   shakeIntensity: number = 0;
   
   // Titan stats
@@ -97,7 +86,8 @@ export class Titan {
   private isFiring = false;
   private lastFireTime = 0;
   private readonly FIRE_COOLDOWN = 0.15; // seconds
-  private bullets: { mesh: THREE.Mesh; velocity: THREE.Vector3; time: number }[] = [];
+  private bullets: Bullet[] = [];
+  private ballisticsSystem!: BallisticsSystem;
   
   constructor(scene: THREE.Scene, world: CANNON.World, position?: THREE.Vector3) {
     this.scene = scene;
@@ -118,10 +108,12 @@ export class Titan {
     
     // Create physics body for collision
     this.createPhysicsBody();
-    
+    this.ballisticsSystem = new BallisticsSystem(this.scene);
+    this.impactRenderer = new ImpactEffectsRenderer(this.scene);
+
     this.group.visible = false;
   }
-  
+
   private createPhysicsBody(): void {
     // Create a box shape for the titan's body
     const shape = new CANNON.Box(new CANNON.Vec3(2, 5, 2));
@@ -147,29 +139,6 @@ export class Titan {
     }
   }
 
-  private isTitanPart(obj: THREE.Object3D): boolean {
-    let current: THREE.Object3D | null = obj;
-    while (current) {
-      if (current === this.group) return true;
-      current = current.parent;
-    }
-    return false;
-  }
-
-  private getWorldCollisionMeshes(): THREE.Mesh[] {
-    return this.scene.children.filter((o) => {
-      if (!(o instanceof THREE.Mesh)) return false;
-      if (this.isTitanPart(o)) return false;
-      if (this.bullets.some((b) => b.mesh === o)) return false;
-      const mat = o.material;
-      if (Array.isArray(mat)) {
-        if (mat.some((m) => (m as THREE.Material).transparent)) return false;
-      } else if ((mat as THREE.Material).transparent) {
-        return false;
-      }
-      return true;
-    }) as THREE.Mesh[];
-  }
 
   private moveBlocked(moveX: number, moveZ: number, meshes: THREE.Mesh[]): { blocked: boolean; normal: THREE.Vector3 } {
     const move = new THREE.Vector3(moveX, 0, moveZ);
@@ -615,7 +584,7 @@ export class Titan {
     
     // Update smoke particles
     this.updateSmokeParticles(delta);
-    this.updateImpactEffects(delta);
+    this.impactRenderer.update(delta);
     this.updateDashMeter(delta);
   }
 
@@ -764,89 +733,6 @@ export class Titan {
     }
   }
 
-  private createBulletImpact(point: THREE.Vector3, normal: THREE.Vector3): void {
-    const n = normal.lengthSq() > 1e-6 ? normal.clone().normalize() : new THREE.Vector3(0, 1, 0);
-
-    const flashGeo = new THREE.RingGeometry(0.08, 0.3, 20);
-    const flashMat = new THREE.MeshBasicMaterial({
-      color: 0xffaa66,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const flash = new THREE.Mesh(flashGeo, flashMat);
-    flash.position.copy(point).add(n.clone().multiplyScalar(0.03));
-    flash.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-    this.scene.add(flash);
-    this.impactFlashes.push({
-      mesh: flash,
-      life: 0.12,
-      maxLife: 0.12
-    });
-
-    const sparkCount = 10 + Math.floor(Math.random() * 5);
-    for (let i = 0; i < sparkCount; i++) {
-      const size = 0.03 + Math.random() * 0.04;
-      const sparkGeo = new THREE.SphereGeometry(size, 4, 4);
-      const sparkMat = new THREE.MeshBasicMaterial({
-        color: 0xff9922,
-        transparent: true,
-        opacity: 1,
-        depthWrite: false
-      });
-      const spark = new THREE.Mesh(sparkGeo, sparkMat);
-      spark.position.copy(point);
-
-      const rand = new THREE.Vector3(
-        (Math.random() - 0.5) * 1.6,
-        Math.random() * 1.2,
-        (Math.random() - 0.5) * 1.6
-      );
-      const dir = n.clone().multiplyScalar(0.9).add(rand).normalize();
-      const speed = 8 + Math.random() * 14;
-
-      this.scene.add(spark);
-      this.impactParticles.push({
-        mesh: spark,
-        velocity: dir.multiplyScalar(speed),
-        life: 0.2 + Math.random() * 0.25,
-        maxLife: 0.45
-      });
-    }
-  }
-
-  private updateImpactEffects(delta: number): void {
-    for (let i = this.impactParticles.length - 1; i >= 0; i--) {
-      const p = this.impactParticles[i];
-      p.life -= delta;
-      p.velocity.y -= 18 * delta;
-      p.mesh.position.add(p.velocity.clone().multiplyScalar(delta));
-      p.mesh.scale.multiplyScalar(0.98);
-      (p.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, p.life / p.maxLife);
-
-      if (p.life <= 0) {
-        this.scene.remove(p.mesh);
-        p.mesh.geometry.dispose();
-        (p.mesh.material as THREE.Material).dispose();
-        this.impactParticles.splice(i, 1);
-      }
-    }
-
-    for (let i = this.impactFlashes.length - 1; i >= 0; i--) {
-      const f = this.impactFlashes[i];
-      f.life -= delta;
-      f.mesh.scale.multiplyScalar(1 + 8 * delta);
-      (f.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, f.life / f.maxLife);
-
-      if (f.life <= 0) {
-        this.scene.remove(f.mesh);
-        f.mesh.geometry.dispose();
-        (f.mesh.material as THREE.Material).dispose();
-        this.impactFlashes.splice(i, 1);
-      }
-    }
-  }
   
   private updateLanding(delta: number): void {
     this.landingAnimation += delta * 2;
@@ -944,7 +830,7 @@ export class Titan {
     const dashActive = this.dashTimer > 0;
     const desiredX = (dashActive ? this.dashDirection.x * this.DASH_SPEED : this.titanVelocity.x) * delta;
     const desiredZ = (dashActive ? this.dashDirection.z * this.DASH_SPEED : this.titanVelocity.z) * delta;
-    const collisionMeshes = this.getWorldCollisionMeshes();
+    const collisionMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
     const primary = this.moveBlocked(desiredX, desiredZ, collisionMeshes);
     if (!primary.blocked) {
       this.group.position.x += desiredX;
@@ -990,72 +876,57 @@ export class Titan {
   }
   
   private fireWeapon(): void {
-    // Create bullet from right arm position
-    const bulletGeo = new THREE.SphereGeometry(0.2, 8, 8);
-    const bulletMat = new THREE.MeshBasicMaterial({ color: 0xff6600 });
-    const bullet = new THREE.Mesh(bulletGeo, bulletMat);
-
-    // Find crosshair aim point from cockpit camera ray.
     const cockpit = this.getCockpitCamera();
     const aimForward = new THREE.Vector3(0, 0, -1).applyEuler(cockpit.rotation).normalize();
+    const worldMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
     const raycaster = new THREE.Raycaster(cockpit.position, aimForward, 0, 500);
-    const intersections = raycaster.intersectObjects(this.getWorldCollisionMeshes(), false);
+    const intersections = raycaster.intersectObjects(worldMeshes, false);
     const aimPoint = intersections.length > 0
       ? intersections[0].point
       : cockpit.position.clone().add(aimForward.clone().multiplyScalar(200));
 
-    // Spawn from muzzle/hand so visuals are weapon-origin.
     const startPos = new THREE.Vector3();
     this.rightFist.getWorldPosition(startPos);
-    bullet.position.copy(startPos);
-    const shotDir = aimPoint.sub(startPos).normalize();
-    const velocity = shotDir.multiplyScalar(150);
-    
-    this.scene.add(bullet);
-    this.bullets.push({
-      mesh: bullet,
-      velocity: velocity,
-      time: 0
-    });
+    const velocity = aimPoint.clone().sub(startPos).normalize().multiplyScalar(TITAN_WEAPON.bulletSpeed);
+
+    const bullet = this.ballisticsSystem.createBullet(startPos, velocity, TITAN_WEAPON.bulletVisuals);
+    this.bullets.push(bullet);
   }
-  
+
   private updateBullets(delta: number, targets: TitanBulletTarget[], enemies: TitanBulletEnemy[]): void {
+    const worldMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
+
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
-      b.time += delta;
-      
       const prevPos = b.mesh.position.clone();
-      const step = b.velocity.clone().multiplyScalar(delta);
-      const nextPos = prevPos.clone().add(step);
-      b.mesh.position.copy(nextPos);
+      this.ballisticsSystem.updateBullet(b, delta);
+      const step = b.mesh.position.clone().sub(prevPos);
 
       let hit = false;
       const stepLen = step.length();
       if (stepLen > 1e-6) {
         const raycaster = new THREE.Raycaster(prevPos, step.clone().normalize(), 0, stepLen);
-        const wallHits = raycaster.intersectObjects(this.getWorldCollisionMeshes(), false);
+        const wallHits = raycaster.intersectObjects(worldMeshes, false);
         if (wallHits.length > 0 && wallHits[0].distance <= stepLen) {
           const wallHit = wallHits[0];
           b.mesh.position.copy(wallHit.point);
           const hitNormal = wallHit.face
             ? wallHit.face.normal.clone().transformDirection((wallHit.object as THREE.Mesh).matrixWorld)
             : step.clone().normalize().negate();
-          this.createBulletImpact(wallHit.point, hitNormal);
+          this.impactRenderer.spawnImpact(wallHit.point, hitNormal, TITAN_IMPACT_CONFIG);
           hit = true;
         }
       }
 
       if (hit) {
-        this.scene.remove(b.mesh);
-        b.mesh.geometry.dispose();
-        (b.mesh.material as THREE.Material).dispose();
+        this.ballisticsSystem.disposeBullet(b);
         this.bullets.splice(i, 1);
         continue;
       }
 
       for (const target of targets) {
         if (target.checkBulletHit(b.mesh.position)) {
-          target.takeDamage(35, b.mesh.position);
+          target.takeDamage(TITAN_WEAPON.damage, b.mesh.position);
           hit = true;
           break;
         }
@@ -1064,18 +935,15 @@ export class Titan {
       if (!hit) {
         for (const enemy of enemies) {
           if (enemy.checkBulletHit(b.mesh.position)) {
-            enemy.takeDamage(35, b.mesh.position);
+            enemy.takeDamage(TITAN_WEAPON.damage, b.mesh.position);
             hit = true;
             break;
           }
         }
       }
-      
-      // Remove on hit or after lifetime.
-      if (hit || b.time > 3) {
-        this.scene.remove(b.mesh);
-        b.mesh.geometry.dispose();
-        (b.mesh.material as THREE.Material).dispose();
+
+      if (hit || b.time > b.maxLifetime) {
+        this.ballisticsSystem.disposeBullet(b);
         this.bullets.splice(i, 1);
       }
     }
@@ -1180,18 +1048,12 @@ export class Titan {
     });
     this.smokeParticles = [];
 
-    this.impactParticles.forEach((particle) => {
-      this.scene.remove(particle.mesh);
-      particle.mesh.geometry.dispose();
-      (particle.mesh.material as THREE.Material).dispose();
-    });
-    this.impactParticles = [];
+    this.impactRenderer.disposeAll();
 
-    this.impactFlashes.forEach((flash) => {
-      this.scene.remove(flash.mesh);
-      flash.mesh.geometry.dispose();
-      (flash.mesh.material as THREE.Material).dispose();
-    });
-    this.impactFlashes = [];
+    // Dispose in-flight bullets
+    for (const b of this.bullets) {
+      this.ballisticsSystem.disposeBullet(b);
+    }
+    this.bullets = [];
   }
 }

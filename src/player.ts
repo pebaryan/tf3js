@@ -4,6 +4,7 @@ import { getBindings } from "./keybindings";
 import { Weapon, R201_WEAPON } from "./weapons";
 import { BallisticsSystem, Bullet } from "./ballistics";
 import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG } from "./effects";
+import { MovementSystem, MovementInput } from "./movement";
 
 interface KeyState {
   forward: boolean;
@@ -49,60 +50,18 @@ export class Player {
     embark: false,
   };
 
-  // --- movement velocity we control (not cannon) ---
-  private vel = new THREE.Vector3();
+  // --- movement (delegated to MovementSystem) ---
+  private movement!: MovementSystem;
 
-  // --- state ---
-  private isGrounded = false;
-  private jumpCount = 0;
-  private isWallRunning = false;
-  private isSliding = false;
-  private slideTimer = 0;
-  private wallNormal = new THREE.Vector3();
-  private wallRunTimer = 0;
-  private isMantling = false;
-  private mantleTimer = 0;
-  private mantleTarget = new THREE.Vector3();
-  private wallJumpCooldown = 0;
-  private wallRunExitGraceTimer = 0;
-  private slideEndCooldown = 0;
-  private readonly SLIDE_STOP_DELAY = 0.15;
-  private needsCrouchRelease = false;
-  private wasGrounded = false;
-  private edgeBoostCooldown = 0;
-
+  // Sound state tracking (previous-frame flags for transition detection)
   private wasJumping = false;
   private wasSliding = false;
   private wasWallRunning = false;
   private wasMantling = false;
 
-  private coyoteTime = 0.12;
-  private coyoteTimer = 0;
-  private jumpBufferTime = 0.12;
-  private jumpBufferTimer = 0;
-
-  // --- tuning ---
-  private readonly GROUND_SPEED = 6;
-  private readonly CROUCH_SPEED = 3;
-  private readonly SPRINT_SPEED = 10;
-  private readonly SLIDE_SPEED = 22; // Max slide speed cap
-  private readonly JUMP_FORCE = 11;
-  private readonly DOUBLE_JUMP = 10;
-  private readonly GRAVITY = -28;
-  private readonly AIR_ACCEL = 60;
-  private readonly AIR_SPEED_CAP = 6; // Quake-style wish-speed - increased for slide hop chains
-  private readonly WALL_RUN_SPEED = 16;
-  private readonly WALL_RUN_MAX_TIME = 2.5;
-  private readonly WALL_RUN_EXIT_GRACE = 0.12;
-  private readonly WALL_JUMP_UP = 10;
-  private readonly WALL_JUMP_OUT = 8;
-  private readonly GROUND_ACCEL = 80;
-  private readonly MANTLE_UP_SPEED = 12;
-  private readonly MANTLE_FWD_SPEED = 6;
-  private readonly MANTLE_DURATION = 0.25;
-  private readonly MANTLE_BOOST = 8; // extra forward kick after mantle
-  private readonly MANTLE_MAX_HEIGHT = 2.5; // how high we can mantle
-  private readonly MANTLE_MIN_HEIGHT = 0.3; // ignore tiny lips
+  // Edge-trigger flags consumed once per update() call
+  private jumpJustPressed = false;
+  private crouchJustPressed = false;
 
   // --- gamepad ---
   private gamepadIndex: number | null = null;
@@ -152,6 +111,7 @@ export class Player {
     this.body.type = CANNON.Body.DYNAMIC;
     world.addBody(this.body);
 
+    this.movement = new MovementSystem(scene, this.body);
     this.setupControls();
     this.createWeapon();
     this.ballisticsSystem = new BallisticsSystem(this.scene);
@@ -203,9 +163,9 @@ export class Player {
     else if (e.code === b.backward)  { this.keys.backward = true; }
     else if (e.code === b.left)      { this.keys.left = true; }
     else if (e.code === b.right)     { this.keys.right = true; }
-    else if (e.code === b.jump)      { this.keys.jump = true; this.jumpBufferTimer = this.jumpBufferTime; }
+    else if (e.code === b.jump)      { this.keys.jump = true; this.jumpJustPressed = true; }
     else if (e.code === b.sprint)    { this.keys.sprint = true; }
-    else if (e.code === b.crouch)    { this.keys.crouch = true; this.tryCrouch(); }
+    else if (e.code === b.crouch)    { this.keys.crouch = true; this.crouchJustPressed = true; }
     else if (e.code === b.embark)    { 
       this.keys.embark = true;
       // Start tracking hold time
@@ -347,7 +307,7 @@ export class Player {
   syncToTitan(position: THREE.Vector3, yaw: number): void {
     this.body.position.set(position.x, position.y + 1, position.z);
     this.body.velocity.set(0, 0, 0);
-    this.vel.set(0, 0, 0);
+    this.movement.vel.set(0, 0, 0);
     this.group.position.set(position.x, position.y + 1, position.z);
     this.euler.y = yaw;
   }
@@ -360,7 +320,7 @@ export class Player {
   }
 
   setVelocity(x: number, y: number, z: number): void {
-    this.vel.set(x, y, z);
+    this.movement.vel.set(x, y, z);
   }
 
   private pollGamepad() {
@@ -396,12 +356,12 @@ export class Player {
     }
 
     if (lb && !this.gamepadJumpPrev) {
-      this.jumpBufferTimer = this.jumpBufferTime;
+      this.jumpJustPressed = true;
     }
     this.gamepadJumpPrev = lb;
 
     if (rb && !this.gamepadCrouchPrev) {
-      this.tryCrouch();
+      this.crouchJustPressed = true;
     }
     this.gamepadCrouchPrev = rb;
     this.gamepadCrouch = rb;
@@ -473,326 +433,40 @@ export class Player {
   }
 
   /* ------------------------------------------------------------------ */
-  /*  Helpers                                                            */
+  /*  Main update – called AFTER world.step()                           */
   /* ------------------------------------------------------------------ */
 
-  private hSpeed(): number {
-    return Math.sqrt(this.vel.x * this.vel.x + this.vel.z * this.vel.z);
+  private buildMovementInput(): MovementInput {
+    const input: MovementInput = {
+      forward:          this.keys.forward,
+      backward:         this.keys.backward,
+      left:             this.keys.left,
+      right:            this.keys.right,
+      jumpJustPressed:  this.jumpJustPressed,
+      sprint:           this.keys.sprint,
+      crouch:           this.keys.crouch,
+      crouchJustPressed: this.crouchJustPressed,
+      gamepadMove:      this.gamepadMove.clone(),
+      gamepadSprint:    this.gamepadSprint,
+      gamepadCrouch:    this.gamepadCrouch,
+      yaw:              this.euler.y,
+    };
+    // Consume the edge-trigger flags
+    this.jumpJustPressed   = false;
+    this.crouchJustPressed = false;
+    return input;
   }
-
-  private wishDir(): THREE.Vector3 {
-    const d = new THREE.Vector3();
-    if (this.keys.forward) d.z -= 1;
-    if (this.keys.backward) d.z += 1;
-    if (this.keys.left) d.x -= 1;
-    if (this.keys.right) d.x += 1;
-    if (this.gamepadMove.length() > 0.1) {
-      d.x += this.gamepadMove.x;
-      d.z += this.gamepadMove.y;
-    }
-    if (d.length() > 0) {
-      d.normalize();
-      d.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.euler.y);
-    }
-    return d;
-  }
-
-  private isSprinting(): boolean {
-    return this.keys.sprint || this.gamepadSprint;
-  }
-
-  private isCrouching(): boolean {
-    return this.keys.crouch || this.gamepadCrouch;
-  }
-
-  /* ------------------------------------------------------------------ */
-  /*  Raycasts (Three.js – independent of cannon)                       */
-  /* ------------------------------------------------------------------ */
-
-  private getMeshes(): THREE.Mesh[] {
-    return this.scene.children.filter(
-      (o) => o instanceof THREE.Mesh,
-    ) as THREE.Mesh[];
-  }
-
-
-  private checkGrounded(): boolean {
-    const from = new THREE.Vector3(
-      this.body.position.x,
-      this.body.position.y,
-      this.body.position.z,
-    );
-    const rc = new THREE.Raycaster(from, new THREE.Vector3(0, -1, 0), 0, 0.55);
-    return rc.intersectObjects(this.getMeshes()).length > 0;
-  }
-
-  /**
-   * Check grounded with surface info - returns surface normal and material for slide physics
-   */
-  private checkGroundedWithSurface(): { 
-    grounded: boolean; 
-    normal: THREE.Vector3; 
-    material?: THREE.Material;
-    steepness: number;
-  } {
-    const from = new THREE.Vector3(
-      this.body.position.x,
-      this.body.position.y,
-      this.body.position.z,
-    );
-    const rc = new THREE.Raycaster(from, new THREE.Vector3(0, -1, 0), 0, 0.55);
-    const hits = rc.intersectObjects(this.getMeshes());
-    
-    if (hits.length === 0) {
-      return { grounded: false, normal: new THREE.Vector3(0, 1, 0), steepness: 0 };
-    }
-    
-    const hit = hits[0];
-    const normal = hit.face?.normal.clone() ?? new THREE.Vector3(0, 1, 0);
-    normal.transformDirection(hit.object.matrixWorld);
-    
-    // Steepness = 0 for flat (normal pointing up), approaches 1 as it gets steeper
-    const steepness = 1 - Math.abs(normal.dot(new THREE.Vector3(0, 1, 0)));
-    
-    const material = (hit.object as THREE.Mesh).material as THREE.Material;
-    
-    return { grounded: true, normal, material, steepness };
-  }
-
-  private checkWall(): { hit: boolean; normal: THREE.Vector3; side: number } {
-    const from = new THREE.Vector3(
-      this.body.position.x,
-      this.body.position.y + 0.2,
-      this.body.position.z,
-    );
-    const meshes = this.getMeshes();
-    const yAxis = new THREE.Vector3(0, 1, 0);
-    const dirs = [
-      new THREE.Vector3(1, 0, 0).applyAxisAngle(yAxis, this.euler.y),
-      new THREE.Vector3(-1, 0, 0).applyAxisAngle(yAxis, this.euler.y),
-    ];
-    for (let i = 0; i < dirs.length; i++) {
-      const rc = new THREE.Raycaster(from, dirs[i], 0, 1.0);
-      const hits = rc.intersectObjects(meshes);
-      if (hits.length > 0 && hits[0].distance < 0.8) {
-        const n = hits[0].face?.normal.clone() ?? new THREE.Vector3();
-        n.transformDirection(hits[0].object.matrixWorld);
-        return { hit: true, normal: n, side: i === 0 ? 1 : -1 };
-      }
-    }
-    return { hit: false, normal: new THREE.Vector3(), side: 0 };
-  }
-
-  /**
-   * Mantle check: cast forward at chest height. If blocked, cast down
-   * from above to find the ledge top. If the ledge is within mantle
-   * range and there's open space above it, we can mantle.
-   */
-  private checkMantle(): { can: boolean; ledgeY: number } {
-    const meshes = this.getMeshes();
-    const pos = new THREE.Vector3(
-      this.body.position.x,
-      this.body.position.y,
-      this.body.position.z,
-    );
-    const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(
-      new THREE.Vector3(0, 1, 0),
-      this.euler.y,
-    );
-    fwd.y = 0;
-    fwd.normalize();
-
-    // 1. Forward ray at chest height – is there a wall in front?
-    const chestOrigin = pos.clone().add(new THREE.Vector3(0, 0.3, 0));
-    const fwdRay = new THREE.Raycaster(chestOrigin, fwd, 0, 1.0);
-    const fwdHits = fwdRay.intersectObjects(meshes);
-    if (fwdHits.length === 0) return { can: false, ledgeY: 0 };
-
-    // 2. Forward ray at head height – must be clear (otherwise wall is too tall)
-    const headOrigin = pos
-      .clone()
-      .add(new THREE.Vector3(0, this.MANTLE_MAX_HEIGHT, 0));
-    const headRay = new THREE.Raycaster(headOrigin, fwd, 0, 1.0);
-    const headHits = headRay.intersectObjects(meshes);
-    if (
-      headHits.length > 0 &&
-      headHits[0].distance < fwdHits[0].distance + 0.2
-    ) {
-      return { can: false, ledgeY: 0 }; // wall extends above mantle height
-    }
-
-    // 3. Cast down from above the wall to find the ledge surface
-    const aboveOrigin = pos
-      .clone()
-      .add(fwd.clone().multiplyScalar(fwdHits[0].distance + 0.3));
-    aboveOrigin.y = pos.y + this.MANTLE_MAX_HEIGHT + 0.5;
-    const downRay = new THREE.Raycaster(
-      aboveOrigin,
-      new THREE.Vector3(0, -1, 0),
-      0,
-      this.MANTLE_MAX_HEIGHT + 1,
-    );
-    const downHits = downRay.intersectObjects(meshes);
-    if (downHits.length === 0) return { can: false, ledgeY: 0 };
-
-    const ledgeY = downHits[0].point.y;
-    const heightDiff = ledgeY - pos.y;
-
-    if (
-      heightDiff < this.MANTLE_MIN_HEIGHT ||
-      heightDiff > this.MANTLE_MAX_HEIGHT
-    ) {
-      return { can: false, ledgeY: 0 };
-    }
-
-    return { can: true, ledgeY: ledgeY + 0.6 }; // +0.6 so player stands on top
-  }
-
-  /* ------------------------------------------------------------------ */
-  /*  Slide                                                              */
-  /* ------------------------------------------------------------------ */
-
-  private tryCrouch() {
-    if (this.isSliding) return;
-    // Can slide anytime while grounded with sufficient speed
-    this.startSlide();
-  }
-
-  private startSlide() {
-    if (this.isSliding) return;
-    
-    // Can slide while grounded
-    if (!this.isGrounded) return;
-    
-    // Minimum speed to slide
-    const minSlideSpeed = 4;
-    const currentSpeed = this.hSpeed();
-    
-    // Allow slide at any angle as long as grounded and moving fast enough
-    if (currentSpeed < minSlideSpeed && !this.isSprinting()) return;
-    
-    this.isSliding = true;
-    this.slideTimer = 0; // Track elapsed time, not duration limit
-    
-    // Use entry velocity with small boost, capped at max slide speed
-    const entrySpeed = Math.max(currentSpeed, this.isSprinting() ? 14 : 8);
-    const boostedSpeed = Math.min(entrySpeed * 1.1, this.SLIDE_SPEED);
-    
-    // Set velocity in current movement direction
-    const dir = currentSpeed > 1
-      ? new THREE.Vector3(this.vel.x, 0, this.vel.z).normalize()
-      : this.wishDir();
-      
-    if (dir.length() > 0) {
-      this.vel.x = dir.x * boostedSpeed;
-      this.vel.z = dir.z * boostedSpeed;
-    }
-  }
-
-  /* ------------------------------------------------------------------ */
-  /*  Jump                                                               */
-  /* ------------------------------------------------------------------ */
-
-  private tryJump() {
-    // Slide hop - jump while sliding preserves momentum
-    if (this.isSliding) {
-      this.isSliding = false;
-      this.vel.y = this.JUMP_FORCE;
-      
-      // Preserve 85% of slide momentum + small directional boost
-      const preserveRatio = 0.85;
-      this.vel.x *= preserveRatio;
-      this.vel.z *= preserveRatio;
-      
-      // Add wish direction boost if input present
-      const wish = this.wishDir();
-      if (wish.length() > 0.1) {
-        const boost = 3;
-        this.vel.x += wish.x * boost;
-        this.vel.z += wish.z * boost;
-      }
-      
-      this.jumpCount = 1;
-      this.jumpBufferTimer = 0;
-      return;
-    }
-
-    // Wall jump with bouncing
-    if (this.isWallRunning) {
-      // Calculate approach angle to wall for bounce intensity
-      const moveDir = new THREE.Vector3(this.vel.x, 0, this.vel.z);
-      const currentSpeed = moveDir.length();
-      
-      if (currentSpeed > 0.1) {
-        moveDir.normalize();
-        // Dot product shows how perpendicular we are to wall
-        const wallDot = Math.abs(moveDir.dot(this.wallNormal));
-        
-        // More perpendicular approach = bigger bounce multiplier
-        const bounceMultiplier = 1 + wallDot * 0.8;
-        
-        // Reflect velocity based on approach angle
-        const reflectDir = moveDir.clone().reflect(this.wallNormal).normalize();
-        
-        // Blend between reflection and wall normal for control
-        const finalDir = new THREE.Vector3()
-          .addScaledVector(reflectDir, 0.7)
-          .addScaledVector(this.wallNormal, 0.3)
-          .normalize();
-          
-        const jumpSpeed = this.WALL_JUMP_OUT * bounceMultiplier;
-        this.vel.x = finalDir.x * jumpSpeed;
-        this.vel.z = finalDir.z * jumpSpeed;
-      } else {
-        // Fallback: use wall normal if barely moving
-        const n = this.wallNormal.clone();
-        n.y = 0;
-        n.normalize();
-        this.vel.x = n.x * this.WALL_JUMP_OUT;
-        this.vel.z = n.z * this.WALL_JUMP_OUT;
-      }
-
-      this.vel.y = this.WALL_JUMP_UP;
-      this.isWallRunning = false;
-      this.wallJumpCooldown = 0.2; // 0.2s before can wallrun again
-      this.jumpCount = 1;
-      this.jumpBufferTimer = 0;
-      return;
-    }
-
-    // Ground jump
-    if (this.isGrounded || this.coyoteTimer > 0) {
-      this.vel.y = this.JUMP_FORCE;
-      this.isSliding = false;
-      this.jumpCount = 1;
-      this.coyoteTimer = 0;
-      this.jumpBufferTimer = 0;
-      return;
-    }
-
-  // Double jump (TF2: max 2 jumps total - only after first jump)
-    if (this.jumpCount === 1) {
-      this.vel.y = this.DOUBLE_JUMP;
-      this.jumpCount = 2;
-      this.jumpBufferTimer = 0;
-    }
-  }
-
-  /* ------------------------------------------------------------------ */
-  /*  Main update – called AFTER world.step()                            */
-  /* ------------------------------------------------------------------ */
 
   update(delta: number, targets?: any[], enemies?: any[]) {
     this.pollGamepad();
-    
-    // If piloting titan, update titan controls instead of player movement
+
     if (this.isPilotingTitan) {
       this.updateTitanControls();
-      // Keep existing player bullets simulated, but disable player weapon firing.
+      // Keep existing bullets simulated, but disable firing while in Titan
       this.handleShooting(delta, targets, enemies, false);
       return;
     }
-    
+
     // Track keyboard embark key hold for disembark
     if (this.keys.embark) {
       const holdDuration = (performance.now() - this.keyboardEmbarkStartTime) / 1000;
@@ -802,449 +476,49 @@ export class Player {
           console.log('Keyboard: Disembark blocked - in embark cooldown (' + timeSinceEmbark.toFixed(2) + 's / ' + this.EMBARK_COOLDOWN + 's)');
         } else {
           this.isDisembarking = true;
-          this.hasTriggeredEmbark = true; // Mark as triggered so we don't also embark
+          this.hasTriggeredEmbark = true;
           this.onDisembarkTitan();
         }
       }
     }
-    
-    this.move(delta);
+
+    this.movement.update(delta, this.buildMovementInput());
     this.applyVelocity();
     this.handleShooting(delta, targets, enemies);
     this.syncCamera();
     this.updateUI();
   }
 
-  private exitWallRun(cooldown: number): void {
-    // Preserve only tangent velocity when leaving the wall.
-    const tangent = new THREE.Vector3(this.vel.x, 0, this.vel.z);
-    tangent.addScaledVector(this.wallNormal, -tangent.dot(this.wallNormal));
-
-    if (tangent.lengthSq() > 1e-4) {
-      const speed = Math.max(tangent.length(), this.WALL_RUN_SPEED * 0.75);
-      tangent.normalize().multiplyScalar(speed);
-      this.vel.x = tangent.x;
-      this.vel.z = tangent.z;
-    }
-
-    this.isWallRunning = false;
-    this.wallJumpCooldown = cooldown;
-    this.wallRunExitGraceTimer = this.WALL_RUN_EXIT_GRACE;
-  }
-
-  private move(dt: number) {
-    // Clear crouch release requirement when player actually releases crouch
-    if (this.needsCrouchRelease && !this.isCrouching()) {
-      this.needsCrouchRelease = false;
-    }
-
-    this.wasGrounded = this.isGrounded;
-    this.isGrounded = this.checkGrounded();
-
-    // Read back position cannon solved (collision pushed us out of walls)
-    // but ignore cannon's velocity – we manage our own.
-
-    // Detect landing frame for bunny hopping
-    const justLanded = !this.wasGrounded && this.isGrounded;
-
-    // --- Bunny hop detection ---
-    if (justLanded && this.jumpBufferTimer > 0) {
-      // Bunny hop! Jump immediately on landing, preserving momentum
-      this.vel.y = this.JUMP_FORCE;
-      // Horizontal velocity is preserved (no ground friction)
-      this.isSliding = false;
-      // Don't reset jumpCount - we're continuing our air sequence
-      this.jumpBufferTimer = 0;
-    }
-
-    // --- Grounded transitions ---
-    if (this.isGrounded) {
-      this.coyoteTimer = this.coyoteTime;
-      if (justLanded) {
-        // just landed (normal landing, not bunny hop)
-        this.jumpCount = 0;
-        this.isWallRunning = false;
-        // Auto-slide on landing if crouch is held and moving fast enough
-        if (this.isCrouching()) {
-          this.startSlide();
-        }
-      }
-    } else {
-      this.coyoteTimer -= dt;
-    }
-
-    // --- Wall run detection FIRST (before jump) ---
-    // Decrement cooldowns
-    if (this.wallJumpCooldown > 0) {
-      this.wallJumpCooldown -= dt;
-    }
-    if (this.wallRunExitGraceTimer > 0) {
-      this.wallRunExitGraceTimer -= dt;
-    }
-    if (this.slideEndCooldown > 0) {
-      this.slideEndCooldown -= dt;
-    }
-    if (this.edgeBoostCooldown > 0) {
-      this.edgeBoostCooldown -= dt;
-    }
-    const wall = this.checkWall();
-    // Can only start wallrun if cooldown has expired
-    if (
-      !this.isGrounded &&
-      !this.isMantling &&
-      wall.hit &&
-      this.hSpeed() > 3 &&
-      !this.isWallRunning &&
-      this.wallJumpCooldown <= 0
-    ) {
-      this.isWallRunning = true;
-      this.wallNormal = wall.normal;
-      this.wallRunTimer = 0;
-    }
-    // Wall run timeout check
-    if (this.isWallRunning) {
-      this.wallRunTimer += dt;
-
-      // Lost wall contact: immediately exit wallrun state.
-      if (!wall.hit) {
-        this.exitWallRun(0.1);
-      } else {
-        // Keep normal fresh so run direction stays stable on changing surfaces.
-        this.wallNormal.copy(wall.normal);
-      }
-      
-      // Crouch cancels wall run
-      if (this.isCrouching()) {
-        this.exitWallRun(0.2);
-      }
-      
-      // Timeout after max duration
-      if (this.wallRunTimer > this.WALL_RUN_MAX_TIME) {
-        this.exitWallRun(0.3); // Slightly longer cooldown on timeout
-      }
-    }
-
-    // --- Jump buffer (after wall detection so wallrun is active) ---
-    if (this.jumpBufferTimer > 0) {
-      this.jumpBufferTimer -= dt;
-      this.tryJump();
-    }
-
-    // --- Mantle detection (airborne, moving forward, hitting a ledge) ---
-    // Block mantle shortly after wall run ends to prevent auto-mantle
-    const canMantle = !this.isGrounded && 
-                      !this.isMantling && 
-                      !this.isWallRunning && 
-                      this.wallJumpCooldown < 0.1 && // Brief buffer after wall run
-                      this.vel.y <= 2;
-    if (canMantle) {
-      const wish = this.wishDir();
-      if (wish.length() > 0.1) {
-        const mantle = this.checkMantle();
-        if (mantle.can) {
-          this.isMantling = true;
-          this.mantleTimer = this.MANTLE_DURATION;
-          this.mantleTarget.set(
-            this.body.position.x,
-            mantle.ledgeY,
-            this.body.position.z,
-          );
-          // Move target slightly forward onto the ledge
-          const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(
-            new THREE.Vector3(0, 1, 0),
-            this.euler.y,
-          );
-          fwd.y = 0;
-          fwd.normalize();
-          this.mantleTarget.add(fwd.multiplyScalar(0.5));
-        }
-      }
-    }
-
-    // --- Build velocity based on state ---
-    const wishMove = this.wishDir();
-
-    if (this.isMantling) {
-      // ---- MANTLE ----
-      this.mantleTimer -= dt;
-      // Lerp toward ledge top
-      const diff = this.mantleTarget
-        .clone()
-        .sub(
-          new THREE.Vector3(
-            this.body.position.x,
-            this.body.position.y,
-            this.body.position.z,
-          ),
-        );
-      const upNeeded = diff.y;
-      const fwdNeeded = Math.sqrt(diff.x * diff.x + diff.z * diff.z);
-
-      this.vel.y = Math.max(
-        upNeeded / Math.max(this.mantleTimer, 0.05),
-        this.MANTLE_UP_SPEED,
-      );
-      if (fwdNeeded > 0.1) {
-        const fwdDir = new THREE.Vector3(diff.x, 0, diff.z).normalize();
-        this.vel.x = fwdDir.x * this.MANTLE_FWD_SPEED;
-        this.vel.z = fwdDir.z * this.MANTLE_FWD_SPEED;
-      }
-
-      if (this.mantleTimer <= 0 || upNeeded < 0.1) {
-        // Mantle complete – apply boost
-        this.isMantling = false;
-        const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(
-          new THREE.Vector3(0, 1, 0),
-          this.euler.y,
-        );
-        fwd.y = 0;
-        fwd.normalize();
-        this.vel.x = fwd.x * this.MANTLE_BOOST;
-        this.vel.z = fwd.z * this.MANTLE_BOOST;
-        this.vel.y = 1; // small upward pop
-        this.jumpCount = 0; // reset jumps after mantle
-      }
-    } else if (this.isSliding) {
-      // ---- SLIDE ----
-      // Slide continues even when falling or on steep surfaces
-      this.slideTimer += dt;
-
-      if (!this.isCrouching()) {
-        // Crouch released - exit slide immediately
-        this.isSliding = false;
-        this.vel.x *= 0.5; // Keep some momentum
-        this.vel.z *= 0.5;
-        this.slideEndCooldown = this.SLIDE_STOP_DELAY;
-        return;
-      }
-
-      // Get surface info for physics (only if grounded)
-      const surface = this.checkGroundedWithSurface();
-      
-      // Check if we just left a ledge while sliding (edge boost)
-      const wasGrounded = this.wasGrounded;
-      const justLeftLedge = wasGrounded && !surface.grounded && this.vel.y <= 0.1;
-      if (justLeftLedge && this.hSpeed() > 6) {
-        // Edge boost - accelerate when leaving ledge during slide
-        const boost = 8;
-        const dir = new THREE.Vector3(this.vel.x, 0, this.vel.z).normalize();
-        this.vel.x += dir.x * boost;
-        this.vel.z += dir.z * boost;
-        
-        // Smooth transition off ledge - small upward arc to create parabolic motion
-        this.vel.y = 3; // Initial upward velocity for smooth arc
-      }
-      
-      // Apply gravity when airborne
-      if (!surface.grounded) {
-        this.vel.y += this.GRAVITY * dt;
-      }
-      
-      // Surface-aware friction - different materials have different slide properties
-      let frictionMultiplier = 1.0; // Default: normal friction
-      
-      if (surface.grounded && surface.material) {
-        // Check material name/type for different friction
-        const matName = (surface.material as any).name || '';
-        if (matName.includes('floor') || matName.includes('Floor')) {
-          frictionMultiplier = 0.7; // Smooth floors - less friction
-        } else if (matName.includes('wall') || matName.includes('Wall')) {
-          frictionMultiplier = 1.5; // Walls - more friction  
-        } else if (matName.includes('ramp') || matName.includes('Ramp')) {
-          frictionMultiplier = 0.5; // Ramps - very slippery
-        }
-      }
-
-      // Exponential friction decay - TF2 style momentum preservation
-      const baseFriction = 0.985; // 1.5% speed loss per second
-      const friction = Math.pow(baseFriction, frictionMultiplier);
-      const speed = this.hSpeed();
-      const minSlideSpeed = 1;
-      
-      // Project velocity onto surface plane (follows slope)
-      if (surface.grounded && surface.steepness > 0.05) {
-        const vel = new THREE.Vector3(this.vel.x, 0, this.vel.z);
-        // Remove component into the surface
-        vel.addScaledVector(surface.normal, -vel.dot(surface.normal));
-        this.vel.x = vel.x;
-        this.vel.z = vel.z;
-      }
-      
-      // Apply exponential decay
-      const newSpeed = Math.max(speed * Math.pow(friction, dt * 60), minSlideSpeed);
-      
-      if (speed > 0.1) {
-        const ratio = newSpeed / speed;
-        this.vel.x *= ratio;
-        this.vel.z *= ratio;
-      } else {
-        // Too slow - exit slide
-        this.isSliding = false;
-      }
-
-      // Allow falling during slide (gravity applied above)
-    } else if (this.isWallRunning) {
-      // ---- WALL RUN ----
-      // Determine desired direction from input or camera forward
-      let dir: THREE.Vector3;
-      const wish = this.wishDir();
-      if (wish.length() > 0) {
-        dir = wish.clone();
-      } else {
-        dir = new THREE.Vector3(0, 0, -1).applyAxisAngle(
-          new THREE.Vector3(0, 1, 0),
-          this.euler.y,
-        );
-        dir.y = 0;
-        dir.normalize();
-      }
-
-      // Project onto wall tangent plane — removes component into/away from wall
-      // so looking away from the wall doesn't push the player off it
-      dir.addScaledVector(this.wallNormal, -dir.dot(this.wallNormal));
-      if (dir.length() > 0.01) dir.normalize();
-
-      this.vel.x = dir.x * this.WALL_RUN_SPEED;
-      this.vel.z = dir.z * this.WALL_RUN_SPEED;
-
-      // Small push toward wall to maintain contact with the surface
-      this.vel.x -= this.wallNormal.x * 3;
-      this.vel.z -= this.wallNormal.z * 3;
-
-      this.vel.y = 0; // no gravity during wall run
-    } else if (this.isGrounded) {
-      // ---- GROUND ----
-      // Jump fired this frame (tryJump set vel.y > 0) — preserve horizontal momentum
-      if (this.vel.y > 0) {
-        // do nothing to horizontal velocity
-      } else if (this.slideEndCooldown > 0) {
-        this.vel.x = 0;
-        this.vel.z = 0;
-      } else if (this.isCrouching()) {
-        // Crouch walking
-        const target = this.CROUCH_SPEED;
-        if (wishMove.length() > 0) {
-          // Accelerate toward wish direction
-          const currentSpeed = new THREE.Vector3(this.vel.x, 0, this.vel.z).dot(
-            wishMove,
-          );
-          const addSpeed = target - currentSpeed;
-          if (addSpeed > 0) {
-            const accel = Math.min(this.GROUND_ACCEL * dt, addSpeed);
-            this.vel.x += wishMove.x * accel;
-            this.vel.z += wishMove.z * accel;
-          }
-          // Clamp to crouch speed
-          const hs = this.hSpeed();
-          if (hs > target) {
-            const s = target / hs;
-            this.vel.x *= s;
-            this.vel.z *= s;
-          }
-        }
-      } else {
-        const target = this.isSprinting() ? this.SPRINT_SPEED : this.GROUND_SPEED;
-        if (wishMove.length() > 0) {
-          // Accelerate toward wish direction
-          const currentSpeed = new THREE.Vector3(this.vel.x, 0, this.vel.z).dot(
-            wishMove,
-          );
-          const addSpeed = target - currentSpeed;
-          if (addSpeed > 0) {
-            const accel = Math.min(this.GROUND_ACCEL * dt, addSpeed);
-            this.vel.x += wishMove.x * accel;
-            this.vel.z += wishMove.z * accel;
-          }
-          // Clamp to target
-          const hs = this.hSpeed();
-          if (hs > target) {
-            const s = target / hs;
-            this.vel.x *= s;
-            this.vel.z *= s;
-          }
-        } else {
-          // No input – stop immediately
-          this.vel.x = 0;
-          this.vel.z = 0;
-        }
-      }
-      // Clamp downward velocity on ground
-      if (this.vel.y < 0) this.vel.y = 0;
-    } else {
-      // ---- AIRBORNE ----
-      // Edge boost: speed boost when walking off ledge at speed
-      if (this.edgeBoostCooldown <= 0 && this.wasGrounded && this.vel.y <= 0.1 && this.hSpeed() > 8) {
-        const boost = 8;
-        const dir = new THREE.Vector3(this.vel.x, 0, this.vel.z).normalize();
-        this.vel.x += dir.x * boost;
-        this.vel.z += dir.z * boost;
-        this.edgeBoostCooldown = 0.5;
-      }
-      
-      if (this.wallRunExitGraceTimer <= 0 && wishMove.length() > 0) {
-        // Quake-style air acceleration
-        const currentSpeed = new THREE.Vector3(this.vel.x, 0, this.vel.z).dot(
-          wishMove,
-        );
-        const addSpeed = this.AIR_SPEED_CAP - currentSpeed;
-        if (addSpeed > 0) {
-          const accel = Math.min(this.AIR_ACCEL * dt, addSpeed);
-          this.vel.x += wishMove.x * accel;
-          this.vel.z += wishMove.z * accel;
-        }
-      }
-      this.vel.y += this.GRAVITY * dt;
-    }
-  }
-
-  /** Write our velocity into cannon body so collision resolution uses it. */
+  /** Flush movement velocity into cannon, sync group position, and trigger sounds. */
   private applyVelocity() {
-    // Play jump sound when jumping
-    if (this.vel.y > 0.1 && !this.wasJumping) {
-      import("./sound").then(({ soundManager }) => {
-        soundManager.playSound("jump");
-      });
-    }
-    this.wasJumping = this.vel.y > 0.1;
+    const m = this.movement;
 
-    // Play slide sound when starting slide
-    if (this.isSliding && !this.wasSliding) {
-      import("./sound").then(({ soundManager }) => {
-        soundManager.playSound("slide");
-      });
+    if (m.vel.y > 0.1 && !this.wasJumping) {
+      import("./sound").then(({ soundManager }) => { soundManager.playSound("jump"); });
     }
-    this.wasSliding = this.isSliding;
+    this.wasJumping = m.vel.y > 0.1;
 
-    // Play wall run sound when starting wall run
-    if (this.isWallRunning && !this.wasWallRunning) {
-      import("./sound").then(({ soundManager }) => {
-        soundManager.playSound("wallrun");
-      });
+    if (m.isSliding && !this.wasSliding) {
+      import("./sound").then(({ soundManager }) => { soundManager.playSound("slide"); });
     }
-    this.wasWallRunning = this.isWallRunning;
+    this.wasSliding = m.isSliding;
 
-    // Play mantle sound
-    if (this.isMantling && !this.wasMantling) {
-      import("./sound").then(({ soundManager }) => {
-        soundManager.playSound("mantle");
-      });
+    if (m.isWallRunning && !this.wasWallRunning) {
+      import("./sound").then(({ soundManager }) => { soundManager.playSound("wallrun"); });
     }
-    this.wasMantling = this.isMantling;
+    this.wasWallRunning = m.isWallRunning;
 
-    this.body.velocity.set(this.vel.x, this.vel.y, this.vel.z);
-    // Sync Three.js group from cannon position
+    if (m.isMantling && !this.wasMantling) {
+      import("./sound").then(({ soundManager }) => { soundManager.playSound("mantle"); });
+    }
+    this.wasMantling = m.isMantling;
+
+    m.applyToBody();
     this.group.position.set(
       this.body.position.x,
       this.body.position.y,
       this.body.position.z,
     );
-
-    // Respawn if fallen
-    if (this.body.position.y < -10) {
-      this.body.position.set(0, 5, 0);
-      this.vel.set(0, 0, 0);
-      this.body.velocity.set(0, 0, 0);
-    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -1330,11 +604,15 @@ export class Player {
       // Respawn after death
       setTimeout(() => {
         this.body.position.set(0, 5, 0);
-        this.vel.set(0, 0, 0);
+        this.movement.vel.set(0, 0, 0);
         this.body.velocity.set(0, 0, 0);
         this.health = 100;
       }, 2000);
     }
+  }
+
+  private getMeshes(): THREE.Mesh[] {
+    return this.scene.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh);
   }
 
   private shoot() {
@@ -1413,24 +691,24 @@ export class Player {
         "position:fixed;top:20px;right:20px;color:#0f0;font:14px monospace;z-index:100;background:rgba(0,0,0,0.7);padding:8px;line-height:1.5;";
       document.body.appendChild(el);
     }
-    const hs = this.hSpeed();
-    const state = this.isMantling
+    const m = this.movement;
+    const hs = m.hSpeed();
+    const state = m.isMantling
       ? "MANTLE"
-      : this.isSliding
+      : m.isSliding
         ? "SLIDE"
-        : this.isWallRunning
+        : m.isWallRunning
           ? "WALLRUN"
-          : this.isGrounded
+          : m.isGrounded
             ? "GROUND"
             : "AIR";
-    const isSprinting = this.isSprinting();
-    const sprintStatus = isSprinting ? "ON" : "off";
+    const isSprinting = this.keys.sprint || this.gamepadSprint;
     const sprintColor = isSprinting ? "#00ff00" : "#888888";
     el.innerHTML =
       `Speed: ${hs.toFixed(1)}<br>` +
       `State: ${state}<br>` +
-      `Vel: ${this.vel.x.toFixed(1)}, ${this.vel.y.toFixed(1)}, ${this.vel.z.toFixed(1)}<br>` +
-      `Jumps: ${this.jumpCount}<br>` +
-      `<span style="color:${sprintColor}">SPRINT: ${sprintStatus}</span> | Crouch: ${this.isCrouching()}`;
+      `Vel: ${m.vel.x.toFixed(1)}, ${m.vel.y.toFixed(1)}, ${m.vel.z.toFixed(1)}<br>` +
+      `Jumps: ${m.jumpCount}<br>` +
+      `<span style="color:${sprintColor}">SPRINT: ${isSprinting ? "ON" : "off"}</span> | Crouch: ${this.keys.crouch || this.gamepadCrouch}`;
   }
 }

@@ -184,6 +184,69 @@ export const TITAN_IMPACT_CONFIG: ImpactConfig = {
   sparkMaxLife: 0.45,
 };
 
+export interface ExplosionConfig {
+  coreColor: number;
+  coreRadius: number;
+  coreLife: number;
+  shockwaveColor: number;
+  shockwaveRadius: number;
+  shockwaveLife: number;
+  debrisColor: number;
+  debrisCount: number;
+  debrisMinSize: number;
+  debrisMaxSize: number;
+  debrisSpeedMin: number;
+  debrisSpeedMax: number;
+  debrisGravity: number;
+  debrisLife: number;
+}
+
+export const EPG_EXPLOSION_CONFIG: ExplosionConfig = {
+  coreColor: 0x44aaff,
+  coreRadius: 0.4,
+  coreLife: 0.15,
+  shockwaveColor: 0x88ccff,
+  shockwaveRadius: 0.1,
+  shockwaveLife: 0.25,
+  debrisColor: 0x2288ff,
+  debrisCount: 15,
+  debrisMinSize: 0.02,
+  debrisMaxSize: 0.06,
+  debrisSpeedMin: 6,
+  debrisSpeedMax: 18,
+  debrisGravity: -12,
+  debrisLife: 0.5,
+};
+
+export const FRAG_EXPLOSION_CONFIG: ExplosionConfig = {
+  coreColor: 0xff6622,
+  coreRadius: 0.6,
+  coreLife: 0.2,
+  shockwaveColor: 0xff9944,
+  shockwaveRadius: 0.15,
+  shockwaveLife: 0.3,
+  debrisColor: 0xff4400,
+  debrisCount: 20,
+  debrisMinSize: 0.03,
+  debrisMaxSize: 0.08,
+  debrisSpeedMin: 8,
+  debrisSpeedMax: 22,
+  debrisGravity: -14,
+  debrisLife: 0.6,
+};
+
+export interface MuzzleFlashConfig {
+  color: number;
+  radius: number;
+  life: number;
+}
+
+export const DEFAULT_MUZZLE_CONFIG: MuzzleFlashConfig = {
+  color: 0xffee88,
+  radius: 0.12,
+  life: 0.06,
+};
+
 interface MeshParticle {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
@@ -296,6 +359,83 @@ export class ImpactEffectsRenderer {
         (f.mesh.material as THREE.Material).dispose();
         this.flashes.splice(i, 1);
       }
+    }
+  }
+
+  spawnMuzzleFlash(position: THREE.Vector3, direction: THREE.Vector3, config: MuzzleFlashConfig): void {
+    const geo = new THREE.SphereGeometry(config.radius, 8, 8);
+    const mat = new THREE.MeshBasicMaterial({
+      color: config.color,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(position).add(direction.clone().multiplyScalar(0.3));
+    this.scene.add(mesh);
+    this.flashes.push({ mesh, life: config.life, maxLife: config.life });
+  }
+
+  spawnExplosion(position: THREE.Vector3, config: ExplosionConfig): void {
+    // Core flash sphere
+    const coreGeo = new THREE.SphereGeometry(config.coreRadius, 12, 12);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: config.coreColor,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    });
+    const core = new THREE.Mesh(coreGeo, coreMat);
+    core.position.copy(position);
+    this.scene.add(core);
+    this.flashes.push({ mesh: core, life: config.coreLife, maxLife: config.coreLife });
+
+    // Shockwave ring
+    const ringGeo = new THREE.RingGeometry(config.shockwaveRadius, config.shockwaveRadius * 1.5, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: config.shockwaveColor,
+      transparent: true,
+      opacity: 0.7,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.copy(position);
+    // Random orientation for visual variety
+    ring.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+    this.scene.add(ring);
+    this.flashes.push({ mesh: ring, life: config.shockwaveLife, maxLife: config.shockwaveLife });
+
+    // Debris particles
+    for (let i = 0; i < config.debrisCount; i++) {
+      const size = config.debrisMinSize + Math.random() * (config.debrisMaxSize - config.debrisMinSize);
+      const geo = new THREE.SphereGeometry(size, 4, 4);
+      const mat = new THREE.MeshBasicMaterial({
+        color: config.debrisColor,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.copy(position);
+
+      const angle = Math.random() * Math.PI * 2;
+      const elevation = (Math.random() - 0.3) * Math.PI;
+      const speed = config.debrisSpeedMin + Math.random() * (config.debrisSpeedMax - config.debrisSpeedMin);
+      const velocity = new THREE.Vector3(
+        Math.cos(angle) * Math.cos(elevation) * speed,
+        Math.sin(elevation) * speed,
+        Math.sin(angle) * Math.cos(elevation) * speed,
+      );
+
+      this.scene.add(mesh);
+      this.particles.push({
+        mesh,
+        velocity,
+        gravity: config.debrisGravity,
+        life: config.debrisLife,
+        maxLife: config.debrisLife,
+      });
     }
   }
 

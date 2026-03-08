@@ -10,6 +10,8 @@ export interface Bullet {
   time: number;
   maxLifetime: number;
   gravity: number;
+  explosive: boolean;
+  splashRadius: number;
 }
 
 export class BallisticsSystem {
@@ -64,6 +66,8 @@ export class BallisticsSystem {
       time: 0,
       maxLifetime: visuals.maxLifetime,
       gravity: visuals.gravity,
+      explosive: visuals.explosive,
+      splashRadius: visuals.splashRadius,
     };
   }
 

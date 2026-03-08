@@ -1,9 +1,11 @@
 import * as THREE from "three";
 import * as CANNON from "cannon-es";
 import { getBindings } from "./keybindings";
-import { Weapon, R201_WEAPON } from "./weapons";
+import { Weapon, WeaponManager, R201_WEAPON } from "./weapons";
 import { BallisticsSystem, Bullet } from "./ballistics";
-import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG } from "./effects";
+import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG, DEFAULT_MUZZLE_CONFIG, EPG_EXPLOSION_CONFIG, FRAG_EXPLOSION_CONFIG } from "./effects";
+import { AimingSystem } from "./aiming";
+import { soundManager } from "./sound";
 
 interface KeyState {
   forward: boolean;
@@ -15,6 +17,13 @@ interface KeyState {
   crouch: boolean;
   fire: boolean;
   embark: boolean;
+}
+
+interface Grenade {
+  mesh: THREE.Mesh;
+  velocity: THREE.Vector3;
+  fuseTime: number;
+  bouncesLeft: number;
 }
 
 /**
@@ -76,6 +85,17 @@ export class Player {
   private wasWallRunning = false;
   private wasMantling = false;
 
+  // --- grapple ---
+  private isGrappling = false;
+  private grappleTarget = new THREE.Vector3();
+  private grappleRope: THREE.Line | null = null;
+  private grappleCooldown = 0;
+  private grappleKeyHeld = false;
+  private readonly GRAPPLE_RANGE = 40;
+  private readonly GRAPPLE_PULL_SPEED = 25;
+  private readonly GRAPPLE_COOLDOWN = 8;
+  private readonly GRAPPLE_GRAVITY = -5;
+
   private coyoteTime = 0.12;
   private coyoteTimer = 0;
   private jumpBufferTime = 0.12;
@@ -115,16 +135,32 @@ export class Player {
   private gamepadCrouch = false;
   private gamepadFire = false;
   private gamepadADS = false;
+  private mouseADS = false;
   private gamepadTitanDash = false;
+
+  // --- weapon viewmodel ---
+  private weaponMesh: THREE.Group | null = null;
+  private readonly hipfirePos = new THREE.Vector3(0.25, -0.22, -0.4);
+  private readonly adsPos = new THREE.Vector3(0, -0.13, -0.35);
 
   // --- combat ---
   health = 100;
   titanMeter = 0;
   private lastShotTime = 0;
   private bullets: Bullet[] = [];
+
+  // --- grenades ---
+  private grenades: Grenade[] = [];
+  private grenadeCooldown = 0;
+  private grenadeCount = 2;
   private ballisticsSystem!: BallisticsSystem;
   private impactRenderer!: ImpactEffectsRenderer;
-  private activeWeapon: Weapon = R201_WEAPON;
+  private weaponManager = new WeaponManager();
+  private activeWeapon!: Weapon;
+  private aimingSystem = new AimingSystem();
+  private recoilOffset = { x: 0, y: 0 };
+  private crosshairSpread = 0;
+  private weaponSwitchCooldown = 0;
 
   // cannon body (collision only)
   body: CANNON.Body;
@@ -153,21 +189,146 @@ export class Player {
     world.addBody(this.body);
 
     this.setupControls();
-    this.createWeapon();
     this.ballisticsSystem = new BallisticsSystem(this.scene);
     this.impactRenderer = new ImpactEffectsRenderer(this.scene);
+    this.aimingSystem.setRecoilCompensation((movement) => {
+      this.recoilOffset.x += movement.x;
+      this.recoilOffset.y += movement.y;
+    });
+    this.weaponManager.addWeapon(R201_WEAPON);
+    this.activeWeapon = this.weaponManager.getCurrentWeapon()!;
+    this.rebuildWeaponMesh();
+    this.updateWeaponHUD();
   }
 
   /* ------------------------------------------------------------------ */
   /*  Input                                                              */
   /* ------------------------------------------------------------------ */
 
-  private createWeapon() {
-    const g = new THREE.BoxGeometry(0.08, 0.08, 0.35);
-    const m = new THREE.MeshStandardMaterial({ color: 0x444444 });
-    const gun = new THREE.Mesh(g, m);
-    gun.position.set(0.2, -0.15, -0.3);
-    this.group.add(gun);
+  private rebuildWeaponMesh() {
+    // Remove old weapon mesh
+    if (this.weaponMesh) {
+      this.camera.remove(this.weaponMesh);
+      this.weaponMesh.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      this.weaponMesh = null;
+    }
+
+    const gun = new THREE.Group();
+    const weapon = this.activeWeapon;
+    const name = weapon?.name ?? 'R-201';
+
+    // Shared dark body material
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+    // Accent color from bullet visuals
+    const accentColor = weapon?.bulletVisuals?.color ?? 0x00ffcc;
+    const accentMat = new THREE.MeshStandardMaterial({ color: accentColor, emissive: accentColor, emissiveIntensity: 0.3 });
+
+    if (name === 'R-201') {
+      // Barrel
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.018, 0.4, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0, 0.01, -0.15);
+      gun.add(barrel);
+      // Body
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.2), bodyMat);
+      body.position.set(0, -0.01, 0.05);
+      gun.add(body);
+      // Stock
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.06, 0.1), bodyMat);
+      stock.position.set(0, -0.01, 0.2);
+      gun.add(stock);
+      // Magazine
+      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.08, 0.03), accentMat);
+      mag.position.set(0, -0.06, 0.05);
+      gun.add(mag);
+      // Rail accent
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.01, 0.15), accentMat);
+      rail.position.set(0, 0.03, -0.05);
+      gun.add(rail);
+    } else if (name === 'EVA-8') {
+      // Wide barrel
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.028, 0.3, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0, 0.01, -0.1);
+      gun.add(barrel);
+      // Pump
+      const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.12, 8), accentMat);
+      pump.rotation.x = Math.PI / 2;
+      pump.position.set(0, -0.025, -0.05);
+      gun.add(pump);
+      // Body
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.15), bodyMat);
+      body.position.set(0, -0.01, 0.08);
+      gun.add(body);
+      // Stock
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.07, 0.08), bodyMat);
+      stock.position.set(0, -0.01, 0.2);
+      gun.add(stock);
+    } else if (name === 'Kraber') {
+      // Very long barrel
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.02, 0.55, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0, 0.01, -0.2);
+      gun.add(barrel);
+      // Body
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.05, 0.25), bodyMat);
+      body.position.set(0, -0.01, 0.1);
+      gun.add(body);
+      // Scope
+      const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.1, 8), accentMat);
+      scope.rotation.x = Math.PI / 2;
+      scope.position.set(0, 0.04, 0.0);
+      gun.add(scope);
+      // Scope lens
+      const lens = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8), accentMat);
+      lens.position.set(0, 0.04, -0.05);
+      gun.add(lens);
+      // Stock
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.07, 0.12), bodyMat);
+      stock.position.set(0, -0.02, 0.28);
+      gun.add(stock);
+    } else if (name === 'EPG-1') {
+      // Wide energy barrel
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.2, 10), bodyMat);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0, 0.01, -0.08);
+      gun.add(barrel);
+      // Barrel glow ring
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.038, 0.005, 8, 16), accentMat);
+      ring.position.set(0, 0.01, -0.18);
+      gun.add(ring);
+      // Body
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 0.18), bodyMat);
+      body.position.set(0, -0.01, 0.07);
+      gun.add(body);
+      // Energy cell
+      const cell = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 10), accentMat);
+      cell.position.set(0, -0.01, 0.18);
+      gun.add(cell);
+    } else {
+      // Fallback box
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.3), bodyMat);
+      gun.add(body);
+    }
+
+    // Grip (shared across all weapons)
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.06, 0.025), bodyMat);
+    grip.position.set(0, -0.05, 0.03);
+    grip.rotation.x = -0.2;
+    gun.add(grip);
+    // Trigger guard
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.008, 0.04), bodyMat);
+    guard.position.set(0, -0.03, 0.02);
+    gun.add(guard);
+
+    gun.position.copy(this.hipfirePos);
+    this.camera.add(gun);
+    this.weaponMesh = gun;
   }
 
   private setupControls() {
@@ -176,15 +337,29 @@ export class Player {
     document.addEventListener("mousemove", (e) => this.onMouseMove(e));
     document.addEventListener("mousedown", (e) => {
       if (e.button === 0) this.keys.fire = true;
+      if (e.button === 2) this.mouseADS = true;
     });
     document.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.keys.fire = false;
+      if (e.button === 2) this.mouseADS = false;
     });
+    document.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("gamepadconnected", (e) => {
       this.gamepadIndex = e.gamepad.index;
     });
     window.addEventListener("gamepaddisconnected", () => {
       this.gamepadIndex = null;
+    });
+
+    // Weapon switch via scroll wheel
+    document.addEventListener("wheel", (e) => {
+      if (!document.pointerLockElement) return;
+      if (this.weaponSwitchCooldown > 0) return;
+      if (e.deltaY > 0) {
+        this.switchWeapon(this.weaponManager.nextWeapon());
+      } else if (e.deltaY < 0) {
+        this.switchWeapon(this.weaponManager.prevWeapon());
+      }
     });
 
     // Check for already connected gamepads
@@ -197,6 +372,30 @@ export class Player {
     }
   }
 
+  tryPickupWeapon(newWeapon: Weapon): Weapon | null {
+    const idx = this.weaponManager.getCurrentIndex();
+    const dropped = this.weaponManager.replaceWeapon(idx, newWeapon);
+    if (dropped) {
+      this.activeWeapon = this.weaponManager.getCurrentWeapon()!;
+      this.weaponSwitchCooldown = 0.3;
+      this.rebuildWeaponMesh();
+      this.updateWeaponHUD();
+      soundManager.playSound('pickup', 0.4);
+    }
+    return dropped;
+  }
+
+  private switchWeapon(weapon: Weapon | null): void {
+    if (!weapon || weapon === this.activeWeapon) return;
+    this.weaponManager.cancelReload();
+    this.activeWeapon = weapon;
+    this.weaponSwitchCooldown = 0.3;
+    this.crosshairSpread = 0;
+    this.rebuildWeaponMesh();
+    this.updateWeaponHUD();
+    soundManager.playSound('weapon_switch', 0.4);
+  }
+
   private onKeyDown(e: KeyboardEvent) {
     const b = getBindings();
     if (e.code === b.forward)        { this.keys.forward = true; }
@@ -206,12 +405,20 @@ export class Player {
     else if (e.code === b.jump)      { this.keys.jump = true; this.jumpBufferTimer = this.jumpBufferTime; }
     else if (e.code === b.sprint)    { this.keys.sprint = true; }
     else if (e.code === b.crouch)    { this.keys.crouch = true; this.tryCrouch(); }
-    else if (e.code === b.embark)    { 
+    else if (e.code === b.embark)    {
       this.keys.embark = true;
-      // Start tracking hold time
       this.keyboardEmbarkStartTime = performance.now();
       this.hasTriggeredEmbark = false;
     }
+    // Reload
+    else if (e.code === 'KeyR') { if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); } this.updateWeaponHUD(); }
+    else if (e.code === 'KeyG') { this.throwGrenade(); }
+    else if (e.code === 'KeyQ') { this.grappleKeyHeld = true; this.startGrapple(); }
+    // Weapon switching: 1-4 keys
+    else if (e.code === 'Digit1') { this.switchWeapon(this.weaponManager.switchTo(0)); }
+    else if (e.code === 'Digit2') { this.switchWeapon(this.weaponManager.switchTo(1)); }
+    else if (e.code === 'Digit3') { this.switchWeapon(this.weaponManager.switchTo(2)); }
+    else if (e.code === 'Digit4') { this.switchWeapon(this.weaponManager.switchTo(3)); }
   }
 
   private onKeyUp(e: KeyboardEvent) {
@@ -233,6 +440,7 @@ export class Player {
         this.onEmbarkTitan();
       }
     }
+    else if (e.code === 'KeyQ') { this.grappleKeyHeld = false; this.stopGrapple(); }
   }
 
   // --- look sensitivity ---
@@ -244,14 +452,20 @@ export class Player {
 
   private onMouseMove(e: MouseEvent) {
     if (!document.pointerLockElement) return;
-    const sensMult = this.gamepadADS ? this.ADS_SENS_MULT : 1.0;
+    const sensMult = (this.mouseADS || this.gamepadADS) ? this.ADS_SENS_MULT : 1.0;
     if (this.isPilotingTitan) {
-      // Titan look expects normalized stick-like deltas; convert mouse motion accordingly.
       this.titanMouseLook.x += e.movementX * this.TITAN_LOOK_X_FROM_MOUSE * sensMult;
       this.titanMouseLook.y += e.movementY * this.TITAN_LOOK_Y_FROM_MOUSE * sensMult;
     }
-    this.euler.y -= e.movementX * this.LOOK_SENS_X * sensMult;
-    this.euler.x -= e.movementY * this.LOOK_SENS_Y * sensMult;
+
+    // Apply recoil compensation offset (accumulated from AimingSystem)
+    const compX = this.recoilOffset.x;
+    const compY = this.recoilOffset.y;
+    this.recoilOffset.x = 0;
+    this.recoilOffset.y = 0;
+
+    this.euler.y -= (e.movementX * this.LOOK_SENS_X + compX) * sensMult;
+    this.euler.x -= (e.movementY * this.LOOK_SENS_Y + compY) * sensMult;
     this.euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.euler.x));
   }
 
@@ -267,7 +481,6 @@ export class Player {
   private onTitanControl?: (forward: number, right: number, lookX: number, lookY: number, fire: boolean, dash: boolean) => void;
   private isPilotingTitan = false;
   private gamepadButtonXHoldTime = 0;
-  private gamepadButtonXPrev = false;
   private gamepadMenuPrev = false;
   private keyboardEmbarkStartTime = 0;
   private hasTriggeredEmbark = false;
@@ -276,6 +489,9 @@ export class Player {
   private lastEmbarkTime = 0;
   private isDisembarking = false;
   private gamepadDpadDownPrev = false;
+  private gamepadReloadPrev = false;
+  private gamepadGrenadePrev = false;
+  private gamepadGrapplePrev = false;
 
   setTitanMeterCallback(callback: (meter: number) => void): void {
     this.onTitanMeterChange = callback;
@@ -306,6 +522,8 @@ export class Player {
     if (!piloting) {
       this.titanMouseLook.set(0, 0);
     }
+    const hud = document.getElementById('weapon-hud');
+    if (hud) hud.style.display = piloting ? 'none' : '';
   }
 
   // Call this when piloting to pass controls to titan
@@ -388,12 +606,21 @@ export class Player {
     const buttonX = gp.buttons[2]?.pressed ?? false;
     const dpadDown = gp.buttons[13]?.pressed ?? false;
     const menuBtn = gp.buttons[8]?.pressed ?? false; // Back/Select button
-    const buttonA = gp.buttons[0]?.pressed ?? false; // A / Cross (Titan dash)
-    
-    // Debug: Log button X state changes
-    if (buttonX !== this.gamepadButtonXPrev) {
-      console.log('Button X state changed:', buttonX, 'Buttons available:', gp.buttons.length);
+    const buttonA = gp.buttons[0]?.pressed ?? false; // A = tactical (placeholder)
+    const buttonB = gp.buttons[1]?.pressed ?? false; // B = grenade
+    const buttonY = gp.buttons[3]?.pressed ?? false; // Y = switch weapon
+
+    // Y = cycle weapon
+    if (buttonY && !this.gamepadReloadPrev) {
+      this.switchWeapon(this.weaponManager.nextWeapon());
     }
+    this.gamepadReloadPrev = buttonY;
+
+    // B = grenade
+    if (buttonB && !this.gamepadGrenadePrev) {
+      this.throwGrenade();
+    }
+    this.gamepadGrenadePrev = buttonB;
 
     if (lb && !this.gamepadJumpPrev) {
       this.jumpBufferTimer = this.jumpBufferTime;
@@ -406,39 +633,34 @@ export class Player {
     this.gamepadCrouchPrev = rb;
     this.gamepadCrouch = rb;
 
-    // Button X: Short press = embark, Hold = disembark
+    // Button X: Short press = reload / embark, Hold = disembark
     if (buttonX) {
-      // Only increment hold time if we haven't triggered disembark yet
       if (!this.isDisembarking) {
-        this.gamepadButtonXHoldTime += 0.016; // Approximate delta for 60fps
-        
-        // Check for long hold to disembark (but not within cooldown period after embark)
+        this.gamepadButtonXHoldTime += 0.016;
         const timeSinceEmbark = (performance.now() - this.lastEmbarkTime) / 1000;
         if (this.gamepadButtonXHoldTime >= this.DISENGAGE_HOLD_TIME && !this.isDisembarking && this.onDisembarkTitan) {
           if (timeSinceEmbark < this.EMBARK_COOLDOWN) {
-            console.log('Controller: Disembark blocked - in embark cooldown (' + timeSinceEmbark.toFixed(2) + 's / ' + this.EMBARK_COOLDOWN + 's)');
+            console.log('Controller: Disembark blocked - in embark cooldown');
           } else {
             this.isDisembarking = true;
-            console.log('Controller: Disembark triggered');
             this.onDisembarkTitan();
           }
         }
       }
     } else {
-      // Button released
-      if (this.gamepadButtonXHoldTime > 0 && this.gamepadButtonXHoldTime < this.DISENGAGE_HOLD_TIME && this.onEmbarkTitan) {
-        // Short press - embark
-        console.log('Controller: Embark triggered, hold time:', this.gamepadButtonXHoldTime);
-        this.lastEmbarkTime = performance.now();
-        this.onEmbarkTitan();
-      } else if (this.gamepadButtonXHoldTime >= this.DISENGAGE_HOLD_TIME) {
-        console.log('Controller: Button released after long hold, no action');
+      if (this.gamepadButtonXHoldTime > 0 && this.gamepadButtonXHoldTime < this.DISENGAGE_HOLD_TIME) {
+        // Short press: embark if available, otherwise reload
+        if (this.onEmbarkTitan) {
+          this.lastEmbarkTime = performance.now();
+          this.onEmbarkTitan();
+        } else {
+          if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); }
+          this.updateWeaponHUD();
+        }
       }
       this.gamepadButtonXHoldTime = 0;
       this.isDisembarking = false;
     }
-    this.gamepadButtonXPrev = buttonX;
-
     // D-pad down to call Titan
     if (dpadDown && !this.gamepadDpadDownPrev && this.onCallTitan) {
       this.onCallTitan();
@@ -453,6 +675,18 @@ export class Player {
     this.gamepadMenuPrev = menuBtn;
     this.gamepadTitanDash = buttonA;
 
+    // A = grapple (when not piloting titan)
+    if (!this.isPilotingTitan) {
+      if (buttonA && !this.gamepadGrapplePrev) {
+        this.grappleKeyHeld = true;
+        this.startGrapple();
+      } else if (!buttonA && this.gamepadGrapplePrev) {
+        this.grappleKeyHeld = false;
+        this.stopGrapple();
+      }
+    }
+    this.gamepadGrapplePrev = buttonA;
+
     // Auto-sprint: full stick deflection (check raw axes before sensitivity scaling)
     const rawX = gp.axes[0] ?? 0;
     const rawY = gp.axes[1] ?? 0;
@@ -462,7 +696,7 @@ export class Player {
     this.gamepadADS = lt > 0.3;
 
     if (this.gamepadLook.length() > dz) {
-      const adsMult = this.gamepadADS ? this.ADS_SENS_MULT : 1.0;
+      const adsMult = (this.mouseADS || this.gamepadADS) ? this.ADS_SENS_MULT : 1.0;
       this.euler.y -= this.gamepadLook.x * 0.04 * adsMult;
       this.euler.x -= this.gamepadLook.y * 0.025 * adsMult;
       this.euler.x = Math.max(
@@ -790,6 +1024,7 @@ export class Player {
       this.updateTitanControls();
       // Keep existing player bullets simulated, but disable player weapon firing.
       this.handleShooting(delta, targets, enemies, false);
+      this.updateGrenades(delta, targets, enemies);
       return;
     }
     
@@ -809,8 +1044,11 @@ export class Player {
     }
     
     this.move(delta);
+    this.updateGrapple(delta);
     this.applyVelocity();
     this.handleShooting(delta, targets, enemies);
+    this.updateGrenades(delta, targets, enemies);
+    this.updateAiming(delta);
     this.syncCamera();
     this.updateUI();
   }
@@ -833,6 +1071,9 @@ export class Player {
   }
 
   private move(dt: number) {
+    // Grapple overrides normal movement — physics handled in updateGrapple()
+    if (this.isGrappling) return;
+
     // Clear crouch release requirement when player actually releases crouch
     if (this.needsCrouchRelease && !this.isCrouching()) {
       this.needsCrouchRelease = false;
@@ -1201,33 +1442,25 @@ export class Player {
   private applyVelocity() {
     // Play jump sound when jumping
     if (this.vel.y > 0.1 && !this.wasJumping) {
-      import("./sound").then(({ soundManager }) => {
-        soundManager.playSound("jump");
-      });
+      soundManager.playSound("jump", 0.3);
     }
     this.wasJumping = this.vel.y > 0.1;
 
     // Play slide sound when starting slide
     if (this.isSliding && !this.wasSliding) {
-      import("./sound").then(({ soundManager }) => {
-        soundManager.playSound("slide");
-      });
+      soundManager.playSound("slide", 0.3);
     }
     this.wasSliding = this.isSliding;
 
     // Play wall run sound when starting wall run
     if (this.isWallRunning && !this.wasWallRunning) {
-      import("./sound").then(({ soundManager }) => {
-        soundManager.playSound("wallrun");
-      });
+      soundManager.playSound("wallrun", 0.25);
     }
     this.wasWallRunning = this.isWallRunning;
 
     // Play mantle sound
     if (this.isMantling && !this.wasMantling) {
-      import("./sound").then(({ soundManager }) => {
-        soundManager.playSound("mantle");
-      });
+      soundManager.playSound("mantle", 0.3);
     }
     this.wasMantling = this.isMantling;
 
@@ -1252,11 +1485,31 @@ export class Player {
   /* ------------------------------------------------------------------ */
 
   private handleShooting(delta: number, targets?: any[], enemies?: any[], allowFire: boolean = true) {
-    if (allowFire && (this.keys.fire || this.gamepadFire)) {
+    // Decay weapon switch cooldown
+    if (this.weaponSwitchCooldown > 0) {
+      this.weaponSwitchCooldown = Math.max(0, this.weaponSwitchCooldown - delta);
+    }
+
+    // Tick reload timer
+    if (this.weaponManager.isReloading()) {
+      if (this.weaponManager.updateReload(delta * 1000)) {
+        this.updateWeaponHUD();
+      }
+    }
+
+    if (allowFire && this.weaponSwitchCooldown <= 0 && !this.weaponManager.isReloading() && (this.keys.fire || this.gamepadFire)) {
       const now = performance.now();
-      if (now - this.lastShotTime > 100) {
-        this.shoot();
-        this.lastShotTime = now;
+      if (now - this.lastShotTime > this.activeWeapon.fireRate) {
+        if (this.weaponManager.getCurrentAmmo() <= 0) {
+          // Auto-reload on empty
+          if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); }
+          this.updateWeaponHUD();
+        } else {
+          this.weaponManager.consumeAmmo(1);
+          this.shoot();
+          this.lastShotTime = now;
+          this.updateWeaponHUD();
+        }
       }
     }
 
@@ -1316,6 +1569,37 @@ export class Player {
       }
 
       if (hit || b.time > b.maxLifetime || b.mesh.position.y < -5) {
+        // Explosive bullets trigger explosion + splash damage
+        if (hit && b.explosive) {
+          this.impactRenderer.spawnExplosion(b.mesh.position.clone(), EPG_EXPLOSION_CONFIG);
+          soundManager.playSound('explosion', 0.6);
+          const splashR = b.splashRadius;
+          if (splashR > 0) {
+            const impactPos = b.mesh.position;
+            if (targets) {
+              for (const target of targets) {
+                if (target.checkBulletHit && target.group) {
+                  const dist = impactPos.distanceTo(target.group.position);
+                  if (dist < splashR) {
+                    const falloff = 1 - dist / splashR;
+                    target.takeDamage(Math.round(this.activeWeapon.damage * falloff), impactPos);
+                  }
+                }
+              }
+            }
+            if (enemies) {
+              for (const enemy of enemies) {
+                if (enemy.checkBulletHit && enemy.group) {
+                  const dist = impactPos.distanceTo(enemy.group.position);
+                  if (dist < splashR) {
+                    const falloff = 1 - dist / splashR;
+                    enemy.takeDamage(Math.round(this.activeWeapon.damage * falloff), impactPos);
+                  }
+                }
+              }
+            }
+          }
+        }
         this.ballisticsSystem.disposeBullet(b);
         this.bullets.splice(i, 1);
       }
@@ -1324,8 +1608,39 @@ export class Player {
     this.impactRenderer.update(delta);
   }
 
+  private updateAiming(delta: number): void {
+    // Decay crosshair spread back to 0
+    this.crosshairSpread = Math.max(0, this.crosshairSpread - 30 * delta);
+
+    // Movement-based spread: add spread from horizontal speed
+    const moveSpread = this.hSpeed() * 0.3;
+
+    // Update crosshair DOM element
+    const ch = document.getElementById('crosshair');
+    if (ch) {
+      const totalSpread = this.crosshairSpread + moveSpread;
+      const gap = Math.round(totalSpread);
+      ch.style.setProperty('--spread', `${gap}px`);
+    }
+
+    // Gamepad aim assist: slow look sensitivity when near a target
+    if (this.gamepadLook.length() > 0.1) {
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+      const hits = raycaster.intersectObjects(this.getMeshes());
+      if (hits.length > 0 && hits[0].distance < 30) {
+        // Near a target — apply aim assist (friction)
+        this.aimingSystem.assistAiming({
+          x: this.gamepadLook.x,
+          y: this.gamepadLook.y,
+        });
+      }
+    }
+  }
+
   takeDamage(amount: number) {
     this.health = Math.max(0, this.health - amount);
+    soundManager.playSound('hit', 0.5);
     if (this.health <= 0) {
       // Respawn after death
       setTimeout(() => {
@@ -1364,21 +1679,298 @@ export class Player {
       .clone()
       .add(aimDir.clone().multiplyScalar(0.5));
 
-    // Calculate velocity with ballistic arc compensation
-    const velocity = BallisticsSystem.calculateParabolicVelocity(
-      startPos,
-      targetPoint,
-      weapon.bulletSpeed,
-      Math.abs(weapon.bulletVisuals.gravity),
-      aimDir,
-    );
+    // Fire multiple pellets for shotgun-style weapons
+    const pellets = weapon.bulletsPerShot;
+    const spreadRad = (weapon.spread * Math.PI) / 180;
 
-    const bullet = this.ballisticsSystem.createBullet(startPos, velocity, weapon.bulletVisuals);
-    this.bullets.push(bullet);
+    for (let p = 0; p < pellets; p++) {
+      // Apply spread: randomize aim direction within cone
+      let shotDir = aimDir.clone();
+      if (spreadRad > 0) {
+        const right = new THREE.Vector3().crossVectors(aimDir, new THREE.Vector3(0, 1, 0)).normalize();
+        const up = new THREE.Vector3().crossVectors(right, aimDir).normalize();
+        const angle = Math.random() * Math.PI * 2;
+        const radius = Math.random() * spreadRad;
+        shotDir.add(right.multiplyScalar(Math.cos(angle) * radius));
+        shotDir.add(up.multiplyScalar(Math.sin(angle) * radius));
+        shotDir.normalize();
+      }
+
+      // Compute per-pellet target
+      const pelletTarget = pellets > 1
+        ? startPos.clone().add(shotDir.multiplyScalar(weapon.range))
+        : targetPoint;
+
+      // Calculate velocity with ballistic arc compensation
+      const velocity = BallisticsSystem.calculateParabolicVelocity(
+        startPos,
+        pelletTarget,
+        weapon.bulletSpeed,
+        Math.abs(weapon.bulletVisuals.gravity),
+        shotDir,
+      );
+
+      const bullet = this.ballisticsSystem.createBullet(startPos, velocity, weapon.bulletVisuals);
+      this.bullets.push(bullet);
+    }
+
+    // Visual recoil — crosshair spread only, no camera kick
+    const recoil = weapon.recoil;
+    this.crosshairSpread = Math.min(12, this.crosshairSpread + recoil.y * 2);
+
+    // Muzzle flash
+    if (weapon.muzzleFlash) {
+      this.impactRenderer.spawnMuzzleFlash(startPos, aimDir, DEFAULT_MUZZLE_CONFIG);
+    }
+
+    // Sound
+    soundManager.playSound(weapon.soundId, 0.4);
 
     this.titanMeter = Math.min(100, this.titanMeter + 0.5);
     if (this.onTitanMeterChange) {
       this.onTitanMeterChange(this.titanMeter);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Grapple                                                             */
+  /* ------------------------------------------------------------------ */
+
+  private startGrapple(): void {
+    if (this.isGrappling || this.grappleCooldown > 0) return;
+
+    // Raycast from camera to find grapple point
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    raycaster.far = this.GRAPPLE_RANGE;
+
+    const hits = raycaster.intersectObjects(this.getMeshes());
+    if (hits.length === 0) return;
+
+    this.isGrappling = true;
+    this.grappleTarget.copy(hits[0].point);
+
+    // Create rope line
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(6); // 2 points × 3 components
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x00ffcc,
+      transparent: true,
+      opacity: 0.7,
+    });
+    this.grappleRope = new THREE.Line(geo, mat);
+    this.scene.add(this.grappleRope);
+
+    // Cancel other movement states
+    this.isWallRunning = false;
+    this.isSliding = false;
+    this.isMantling = false;
+
+    soundManager.playSound('grapple', 0.4);
+    this.updateWeaponHUD();
+  }
+
+  private stopGrapple(): void {
+    if (!this.isGrappling) return;
+
+    this.isGrappling = false;
+    this.grappleCooldown = this.GRAPPLE_COOLDOWN;
+
+    // Remove rope
+    if (this.grappleRope) {
+      this.scene.remove(this.grappleRope);
+      this.grappleRope.geometry.dispose();
+      (this.grappleRope.material as THREE.Material).dispose();
+      this.grappleRope = null;
+    }
+
+    // Velocity is preserved — momentum fling on release
+    this.updateWeaponHUD();
+  }
+
+  private updateGrapple(delta: number): void {
+    // Decay cooldown
+    if (this.grappleCooldown > 0) {
+      this.grappleCooldown = Math.max(0, this.grappleCooldown - delta);
+    }
+
+    if (!this.isGrappling) return;
+
+    const playerPos = this.group.position;
+    const toTarget = this.grappleTarget.clone().sub(playerPos);
+    const dist = toTarget.length();
+
+    // Auto-disengage when close to target
+    if (dist < 1.5) {
+      this.stopGrapple();
+      return;
+    }
+
+    // Cancel on jump
+    if (this.jumpBufferTimer > 0) {
+      // Give a small upward boost on jump-cancel
+      this.vel.y = Math.max(this.vel.y, this.JUMP_FORCE * 0.7);
+      this.stopGrapple();
+      return;
+    }
+
+    // Cancel if key released
+    if (!this.grappleKeyHeld) {
+      this.stopGrapple();
+      return;
+    }
+
+    // Physics: pull toward target
+    const dir = toTarget.normalize();
+    const pullAccel = this.GRAPPLE_PULL_SPEED;
+
+    // Accelerate toward target (additive, preserving lateral momentum for swing feel)
+    this.vel.x += dir.x * pullAccel * delta;
+    this.vel.y += dir.y * pullAccel * delta;
+    this.vel.z += dir.z * pullAccel * delta;
+
+    // Reduced gravity while grappling
+    this.vel.y += this.GRAPPLE_GRAVITY * delta;
+
+    // Cap speed to prevent runaway
+    const speed = this.vel.length();
+    if (speed > 35) {
+      this.vel.multiplyScalar(35 / speed);
+    }
+
+    // Update rope visual
+    if (this.grappleRope) {
+      const ropeStart = playerPos.clone();
+      ropeStart.y += 0.3; // slightly above player center
+      const positions = this.grappleRope.geometry.attributes.position as THREE.BufferAttribute;
+      positions.setXYZ(0, ropeStart.x, ropeStart.y, ropeStart.z);
+      positions.setXYZ(1, this.grappleTarget.x, this.grappleTarget.y, this.grappleTarget.z);
+      positions.needsUpdate = true;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Grenades                                                            */
+  /* ------------------------------------------------------------------ */
+
+  private throwGrenade(): void {
+    if (this.grenadeCooldown > 0 || this.grenadeCount <= 0) return;
+
+    this.grenadeCount--;
+    this.grenadeCooldown = 0.8;
+
+    // Throw direction: camera forward with slight upward arc
+    const throwDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    throwDir.y += 0.3;
+    throwDir.normalize();
+
+    const startPos = this.camera.position.clone().add(throwDir.clone().multiplyScalar(0.5));
+    const velocity = throwDir.multiplyScalar(20);
+
+    // Create grenade mesh
+    const geo = new THREE.SphereGeometry(0.05, 8, 8);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x445544,
+      emissive: 0x222211,
+      emissiveIntensity: 0.5,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(startPos);
+    this.scene.add(mesh);
+
+    this.grenades.push({ mesh, velocity, fuseTime: 2.0, bouncesLeft: 3 });
+    this.updateWeaponHUD();
+  }
+
+  private updateGrenades(delta: number, targets?: any[], enemies?: any[]): void {
+    // Decay cooldown
+    if (this.grenadeCooldown > 0) {
+      this.grenadeCooldown = Math.max(0, this.grenadeCooldown - delta);
+    }
+
+    const worldMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
+
+    for (let i = this.grenades.length - 1; i >= 0; i--) {
+      const g = this.grenades[i];
+
+      // Apply gravity
+      g.velocity.y -= 20 * delta;
+
+      // Move
+      const prevPos = g.mesh.position.clone();
+      g.mesh.position.add(g.velocity.clone().multiplyScalar(delta));
+
+      // Bounce detection
+      const step = g.mesh.position.clone().sub(prevPos);
+      const stepLen = step.length();
+      if (stepLen > 1e-6) {
+        const raycaster = new THREE.Raycaster(prevPos, step.clone().normalize(), 0, stepLen + 0.05);
+        const hits = raycaster.intersectObjects(worldMeshes, false);
+        if (hits.length > 0 && hits[0].distance <= stepLen + 0.05) {
+          const hit = hits[0];
+          g.mesh.position.copy(hit.point);
+          const normal = hit.face
+            ? hit.face.normal.clone().transformDirection((hit.object as THREE.Mesh).matrixWorld)
+            : step.clone().normalize().negate();
+
+          if (g.bouncesLeft > 0) {
+            // Reflect velocity off surface normal, dampen
+            g.velocity.reflect(normal).multiplyScalar(0.5);
+            g.bouncesLeft--;
+            // Nudge slightly off surface to prevent sticking
+            g.mesh.position.add(normal.clone().multiplyScalar(0.02));
+          } else {
+            // Out of bounces — stick in place
+            g.velocity.set(0, 0, 0);
+          }
+        }
+      }
+
+      // Tick fuse
+      g.fuseTime -= delta;
+
+      // Fall off world
+      if (g.fuseTime <= 0 || g.mesh.position.y < -20) {
+        // Detonate
+        if (g.fuseTime <= 0) {
+          const pos = g.mesh.position.clone();
+          this.impactRenderer.spawnExplosion(pos, FRAG_EXPLOSION_CONFIG);
+          soundManager.playSound('explosion', 0.6);
+
+          // Splash damage
+          const splashR = 6;
+          const damage = 100;
+          if (targets) {
+            for (const target of targets) {
+              if (target.group) {
+                const dist = pos.distanceTo(target.group.position);
+                if (dist < splashR) {
+                  const falloff = 1 - dist / splashR;
+                  target.takeDamage(Math.round(damage * falloff), pos);
+                }
+              }
+            }
+          }
+          if (enemies) {
+            for (const enemy of enemies) {
+              if (enemy.group) {
+                const dist = pos.distanceTo(enemy.group.position);
+                if (dist < splashR) {
+                  const falloff = 1 - dist / splashR;
+                  enemy.takeDamage(Math.round(damage * falloff), pos);
+                }
+              }
+            }
+          }
+        }
+
+        // Dispose
+        this.scene.remove(g.mesh);
+        g.mesh.geometry.dispose();
+        (g.mesh.material as THREE.Material).dispose();
+        this.grenades.splice(i, 1);
+      }
     }
   }
 
@@ -1395,11 +1987,61 @@ export class Player {
     this.camera.position.copy(this.group.position);
     this.camera.position.y += 0.5;
 
+    // ADS state (mouse right-click or gamepad LT)
+    const isADS = this.mouseADS || this.gamepadADS;
+
     // ADS zoom
-    const targetFOV = this.gamepadADS ? this.adsFOV : this.baseFOV;
+    const targetFOV = isADS ? this.adsFOV : this.baseFOV;
     this.currentFOV += (targetFOV - this.currentFOV) * 0.15;
     this.camera.fov = this.currentFOV;
     this.camera.updateProjectionMatrix();
+
+    // Weapon viewmodel position lerp
+    if (this.weaponMesh) {
+      const target = isADS ? this.adsPos : this.hipfirePos;
+      this.weaponMesh.position.lerp(target, 0.12);
+    }
+  }
+
+  private updateWeaponHUD(): void {
+    let container = document.getElementById('weapon-hud');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'weapon-hud';
+      container.style.cssText =
+        'position:fixed;bottom:80px;right:20px;color:#fff;font:13px monospace;z-index:100;' +
+        'background:rgba(0,0,0,0.6);padding:8px 12px;border-radius:4px;line-height:1.6;';
+      document.body.appendChild(container);
+    }
+    const weapons = this.weaponManager.getAllWeapons();
+    const idx = this.weaponManager.getCurrentIndex();
+    const ammo = this.weaponManager.getCurrentAmmo();
+    const mag = this.activeWeapon.magazineSize;
+    const reloading = this.weaponManager.isReloading();
+
+    const weaponList = weapons
+      .map((w, i) => {
+        const active = i === idx;
+        const color = active ? '#00ffcc' : '#666';
+        const prefix = active ? '>' : ' ';
+        return `<span style="color:${color}">${prefix} ${i + 1}. ${w.name}</span>`;
+      })
+      .join('<br>');
+
+    const ammoColor = ammo === 0 ? '#ff4444' : reloading ? '#ffaa00' : '#fff';
+    const ammoText = reloading
+      ? `<span style="color:#ffaa00">RELOADING</span>`
+      : `<span style="color:${ammoColor}">${ammo} / ${mag}</span>`;
+
+    const grenadeColor = this.grenadeCount > 0 ? '#88cc88' : '#ff4444';
+    const grenadeText = `<span style="color:${grenadeColor}">G: ${this.grenadeCount}</span>`;
+
+    const grappleReady = this.grappleCooldown <= 0;
+    const grappleColor = this.isGrappling ? '#00ffcc' : grappleReady ? '#88cc88' : '#666';
+    const grappleLabel = this.isGrappling ? 'GRAPPLE' : grappleReady ? 'READY' : `${this.grappleCooldown.toFixed(1)}s`;
+    const grappleText = `<span style="color:${grappleColor}">Q: ${grappleLabel}</span>`;
+
+    container.innerHTML = `${weaponList}<br><br>${ammoText}<br>${grenadeText}<br>${grappleText}`;
   }
 
   private updateUI() {

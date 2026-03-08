@@ -8,7 +8,16 @@ import { Player } from './player';
 import { Titan, TitanState } from './titan';
 import { GameState, GameStats } from './types';
 import { GameUI } from './ui';
+import { Weapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON } from './weapons';
 // import { soundManager } from './sound';
+
+interface WeaponPickup {
+  weapon: Weapon;
+  mesh: THREE.Group;
+  position: THREE.Vector3;
+  baseY: number;
+  cooldown: number;
+}
 
 
 export class Game {
@@ -23,6 +32,8 @@ export class Game {
   capturePoints: any[] = [];
   checkpoints: any[] = [];
   titan: Titan | null = null;
+  private weaponPickups: WeaponPickup[] = [];
+  private pickupPromptEl: HTMLElement | null = null;
 
   state: GameState = GameState.MAIN_MENU;
   currentLevel: Level | null = null;
@@ -66,8 +77,7 @@ export class Game {
     this.clock = new THREE.Clock();
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a2e);
-    this.scene.fog = new THREE.Fog(0x1a1a2e, 50, 200);
+    this.scene.fog = new THREE.Fog(0x0a0a1e, 80, 300);
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     this.camera.position.set(0, 2, 0);
@@ -77,13 +87,23 @@ export class Game {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.gameContainer.appendChild(this.renderer.domElement);
 
-    this.ambientLight = new THREE.AmbientLight(0x505080, 0.8);
+    // Sky dome
+    this.createSkyDome();
+
+    // Hemisphere light: sky blue from above, ground warm from below
+    const hemiLight = new THREE.HemisphereLight(0x334466, 0x221122, 0.6);
+    this.scene.add(hemiLight);
+
+    this.ambientLight = new THREE.AmbientLight(0x404060, 0.4);
     this.scene.add(this.ambientLight);
 
-    this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    this.directionalLight.position.set(0, 80, -30);
+    // Sun-like directional light — warm orange tint, lower angle for dramatic shadows
+    this.directionalLight = new THREE.DirectionalLight(0xffd4a0, 1.4);
+    this.directionalLight.position.set(-40, 60, -50);
     this.directionalLight.castShadow = true;
     this.directionalLight.shadow.mapSize.width = 2048;
     this.directionalLight.shadow.mapSize.height = 2048;
@@ -99,6 +119,50 @@ export class Game {
     this.world.gravity.set(0, 0, 0);
 
     window.addEventListener('resize', () => this.onWindowResize());
+  }
+
+  private createSkyDome() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+
+    // Gradient: horizon warm haze → mid deep blue → zenith dark purple
+    const grad = ctx.createLinearGradient(0, 512, 0, 0);
+    grad.addColorStop(0.0, '#1a1018');   // horizon — warm dark
+    grad.addColorStop(0.15, '#2a1428');  // low — reddish haze
+    grad.addColorStop(0.35, '#0e1030');  // mid-low — deep navy
+    grad.addColorStop(0.6, '#0a0c28');   // mid — dark blue
+    grad.addColorStop(1.0, '#060818');   // zenith — near black
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 512, 512);
+
+    // Scatter stars in upper half
+    for (let i = 0; i < 200; i++) {
+      const x = Math.random() * 512;
+      const y = Math.random() * 350; // upper 70%
+      const r = Math.random() * 1.2 + 0.3;
+      const brightness = Math.floor(Math.random() * 100 + 155);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${brightness}, ${brightness}, ${Math.min(255, brightness + 40)}, ${0.4 + Math.random() * 0.6})`;
+      ctx.fill();
+    }
+
+    // A few brighter stars
+    for (let i = 0; i < 15; i++) {
+      const x = Math.random() * 512;
+      const y = Math.random() * 256;
+      ctx.beginPath();
+      ctx.arc(x, y, Math.random() * 1.5 + 1, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(220, 230, 255, ${0.6 + Math.random() * 0.4})`;
+      ctx.fill();
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    this.scene.background = texture;
   }
 
   callTitan(): void {
@@ -289,6 +353,7 @@ export class Game {
     this.checkpoints = [];
     this.capturedTime = 0;
     this.checkpointProgress = 0;
+    this.weaponPickups = [];
 
     // Clear existing scene (keep lights)
     const children = [...this.scene.children];
@@ -330,6 +395,8 @@ export class Game {
       }
     });
     this.scene.add(this.player.group);
+
+    this.spawnWeaponPickups();
 
     if (this.currentLevel.type === LevelType.TRAINING || this.currentLevel.type === LevelType.CAPTURE) {
       for (let i = 0; i < this.currentLevel.targetCount; i++) {
@@ -493,9 +560,160 @@ export class Game {
       this.ui.showEmbarkIndicator(false);
     }
 
+    this.updateWeaponPickups(delta);
     this.updateHUD();
     this.checkLevelCompletion();
     this.stats.time = (Date.now() - this.levelStartTime) / 1000;
+  }
+
+  private spawnWeaponPickups() {
+    // Pickup positions: scattered across the level
+    const pickupDefs: { weapon: Weapon; pos: THREE.Vector3 }[] = [
+      { weapon: EVA8_WEAPON, pos: new THREE.Vector3(-7, 1.5, -35) },
+      { weapon: KRABER_WEAPON, pos: new THREE.Vector3(7, 1.5, -35) },
+      { weapon: EPG_WEAPON, pos: new THREE.Vector3(0, 0.5, -55) },
+    ];
+
+    for (const def of pickupDefs) {
+      const pickup = this.createPickupMesh(def.weapon, def.pos);
+      this.weaponPickups.push(pickup);
+    }
+  }
+
+  private createPickupMesh(weapon: Weapon, position: THREE.Vector3): WeaponPickup {
+    const group = new THREE.Group();
+    const color = weapon.bulletVisuals.color;
+
+    // Weapon indicator box
+    const boxGeo = new THREE.BoxGeometry(0.12, 0.08, 0.35);
+    const boxMat = new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.6,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const box = new THREE.Mesh(boxGeo, boxMat);
+    box.position.y = 0.5;
+    group.add(box);
+
+    // Base ring glow
+    const ringGeo = new THREE.TorusGeometry(0.3, 0.03, 8, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.4,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    group.add(ring);
+
+    // Vertical light beam
+    const beamGeo = new THREE.CylinderGeometry(0.02, 0.02, 1.5, 6);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.15,
+    });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.y = 0.75;
+    group.add(beam);
+
+    group.position.copy(position);
+    this.scene.add(group);
+
+    return {
+      weapon,
+      mesh: group,
+      position: position.clone(),
+      baseY: position.y,
+      cooldown: 0,
+    };
+  }
+
+  private rebuildPickupMesh(pickup: WeaponPickup) {
+    // Remove old mesh children
+    while (pickup.mesh.children.length > 0) {
+      const child = pickup.mesh.children[0];
+      pickup.mesh.remove(child);
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+    this.scene.remove(pickup.mesh);
+
+    // Create new pickup with updated weapon
+    const newPickup = this.createPickupMesh(pickup.weapon, pickup.position);
+    pickup.mesh = newPickup.mesh;
+  }
+
+  private updateWeaponPickups(delta: number) {
+    if (!this.player) return;
+
+    const time = performance.now() * 0.001;
+    let nearestPickup: WeaponPickup | null = null;
+    let nearestDist = Infinity;
+
+    for (const pickup of this.weaponPickups) {
+      // Cooldown
+      if (pickup.cooldown > 0) {
+        pickup.cooldown -= delta;
+        pickup.mesh.visible = pickup.cooldown <= 0;
+        if (pickup.cooldown > 0) continue;
+      }
+
+      // Animate: rotate + bob
+      pickup.mesh.rotation.y += 1.5 * delta;
+      pickup.mesh.position.y = pickup.baseY + Math.sin(time * 2) * 0.1;
+
+      // Distance check
+      const dist = this.player.group.position.distanceTo(pickup.position);
+
+      // Track nearest for prompt
+      if (dist < 4 && dist < nearestDist) {
+        nearestDist = dist;
+        nearestPickup = pickup;
+      }
+
+      // Pickup: walk within 2m
+      if (dist < 2) {
+        const dropped = this.player.tryPickupWeapon(pickup.weapon);
+        if (dropped) {
+          pickup.weapon = dropped;
+          this.rebuildPickupMesh(pickup);
+          pickup.cooldown = 0.5; // brief cooldown to prevent instant re-pickup
+          pickup.mesh.visible = false;
+        }
+      }
+    }
+
+    // Pickup prompt
+    this.updatePickupPrompt(nearestPickup);
+  }
+
+  private updatePickupPrompt(pickup: WeaponPickup | null) {
+    if (!pickup) {
+      if (this.pickupPromptEl) {
+        this.pickupPromptEl.style.display = 'none';
+      }
+      return;
+    }
+
+    if (!this.pickupPromptEl) {
+      this.pickupPromptEl = document.createElement('div');
+      this.pickupPromptEl.style.cssText =
+        'position:fixed;bottom:180px;left:50%;transform:translateX(-50%);' +
+        'color:#fff;font:14px monospace;z-index:100;' +
+        'background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:4px;' +
+        'text-align:center;pointer-events:none;';
+      document.body.appendChild(this.pickupPromptEl);
+    }
+
+    this.pickupPromptEl.style.display = 'block';
+    const color = '#' + pickup.weapon.bulletVisuals.color.toString(16).padStart(6, '0');
+    this.pickupPromptEl.innerHTML =
+      `Pick up <span style="color:${color}">${pickup.weapon.name}</span>`;
   }
 
   private updateObjectives(delta: number) {
@@ -552,29 +770,54 @@ export class Game {
     }));
   }
 
+  private getWorldMeshes(): THREE.Mesh[] {
+    return this.scene.children.filter((o) => {
+      if (!(o instanceof THREE.Mesh)) return false;
+      const mat = o.material;
+      if (Array.isArray(mat)) {
+        if (mat.some((m) => (m as THREE.Material).transparent)) return false;
+      } else if ((mat as THREE.Material).transparent) {
+        return false;
+      }
+      return true;
+    }) as THREE.Mesh[];
+  }
+
   private updateEnemies(delta: number) {
     const playerPos = this.player.group.position;
+    const cameraPos = this.camera.position;
+    const worldMeshes = this.getWorldMeshes();
 
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const enemy = this.enemies[i];
-      const enemyPos = enemy.mesh.position;
 
-      enemy.update(delta, this.camera.position);
+      // AI update: state machine, movement, shooting
+      enemy.update(delta, cameraPos, playerPos, worldMeshes);
 
-      if (enemy.aggressive) {
-        const dir = playerPos.clone().sub(enemyPos).normalize();
-        enemyPos.add(dir.multiplyScalar(enemy.speed * delta));
-        enemy.updatePosition(enemyPos);
-
-        if (enemyPos.distanceTo(playerPos) < 3) {
-          enemy.attackTimer += delta;
-          if (enemy.attackTimer >= enemy.attackCooldown) {
-            enemy.attackTimer = 0;
-            this.player.takeDamage(5);
+      // Check enemy bullets hitting player
+      for (let j = enemy.bullets.length - 1; j >= 0; j--) {
+        const b = enemy.bullets[j];
+        const bPos = b.mesh.position;
+        const dx = bPos.x - playerPos.x;
+        const dy = bPos.y - (playerPos.y + 0.5); // player center
+        const dz = bPos.z - playerPos.z;
+        const distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq < 0.5 * 0.5) {
+          this.player.takeDamage(8);
+          // Dispose this bullet
+          this.scene.remove(b.mesh);
+          b.mesh.geometry.dispose();
+          (b.mesh.material as THREE.Material).dispose();
+          if (b.trail) {
+            this.scene.remove(b.trail);
+            b.trail.geometry.dispose();
+            (b.trail.material as THREE.Material).dispose();
           }
+          enemy.bullets.splice(j, 1);
         }
       }
 
+      // Check enemy death
       if (enemy.health <= 0) {
         enemy.dispose();
         this.enemies.splice(i, 1);

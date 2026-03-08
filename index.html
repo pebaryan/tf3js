@@ -20,10 +20,12 @@
         height: 100vh;
       }
       #crosshair {
+        --spread: 0px;
         position: fixed;
         top: 50%;
         left: 50%;
-        transform: translate(-50%, -50%);
+        width: 0;
+        height: 0;
         pointer-events: none;
         z-index: 100;
       }
@@ -34,18 +36,20 @@
         background: #00ffcc;
       }
       #crosshair::before {
+        /* top segment + bottom segment via box-shadow */
         width: 2px;
-        height: 16px;
-        left: 50%;
-        top: 50%;
-        transform: translate(-50%, -50%);
+        height: 8px;
+        left: -1px;
+        top: calc(-11px - var(--spread));
+        box-shadow: 0 calc(14px + var(--spread) * 2) 0 0 #00ffcc;
       }
       #crosshair::after {
-        width: 16px;
+        /* left segment + right segment via box-shadow */
+        width: 8px;
         height: 2px;
-        left: 50%;
-        top: 50%;
-        transform: translate(-50%, -50%);
+        top: -1px;
+        left: calc(-11px - var(--spread));
+        box-shadow: calc(14px + var(--spread) * 2) 0 0 0 #00ffcc;
       }
       #hud {
         position: fixed;

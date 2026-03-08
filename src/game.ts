@@ -81,6 +81,7 @@ export class Game {
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     this.camera.position.set(0, 2, 0);
+    this.scene.add(this.camera);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -495,11 +496,13 @@ export class Game {
       const z = Math.floor(i / 3) * 10 - 30;
       const position = new THREE.Vector3(x, 1.8, z);
 
+      const diff = 0.3 + Math.random() * 0.4; // 0.3-0.7
       const enemy = new Enemy(this.scene, this.world, position, {
         health: 50,
         speed: 1.5,
         aggressive: false,
-        attackCooldown: 2
+        attackCooldown: 2,
+        difficulty: diff,
       });
 
       this.enemies.push(enemy);
@@ -762,11 +765,13 @@ export class Game {
 
     const point = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
 
+    const diff = 0.3 + Math.random() * 0.5;
     this.enemies.push(new Enemy(this.scene, this.world, point.clone(), {
       health: 50,
       speed: 1.5 + Math.random() * 1.0,
       aggressive: true,
-      attackCooldown: 2 + Math.random() * 2
+      attackCooldown: 2 + Math.random() * 2,
+      difficulty: diff,
     }));
   }
 
@@ -792,7 +797,8 @@ export class Game {
       const enemy = this.enemies[i];
 
       // AI update: state machine, movement, shooting
-      enemy.update(delta, cameraPos, playerPos, worldMeshes);
+      const playerVel = this.player.getVelocity();
+      enemy.update(delta, cameraPos, playerPos, worldMeshes, playerVel);
 
       // Check enemy bullets hitting player
       for (let j = enemy.bullets.length - 1; j >= 0; j--) {

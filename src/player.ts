@@ -455,6 +455,10 @@ export class Player {
     this.movement.vel.set(x, y, z);
   }
 
+  getVelocity(): THREE.Vector3 {
+    return this.movement.vel;
+  }
+
   /* ------------------------------------------------------------------ */
   /*  Gamepad                                                            */
   /* ------------------------------------------------------------------ */

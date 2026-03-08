@@ -93,6 +93,10 @@ export class Player {
   private weaponMesh: THREE.Group | null = null;
   private readonly hipfirePos = new THREE.Vector3(0.25, -0.22, -0.4);
   private readonly adsPos = new THREE.Vector3(0, -0.13, -0.35);
+  private weaponBobTime = 0;
+  private weaponRecoilKick = 0; // current recoil animation (0-1, decays to 0)
+  private weaponSwayX = 0;
+  private weaponSwayY = 0;
 
   // --- combat ---
   health = 100;
@@ -809,7 +813,8 @@ export class Player {
 
   private updateAiming(delta: number): void {
     this.crosshairSpread = Math.max(0, this.crosshairSpread - 30 * delta);
-    const moveSpread = this.movement.hSpeed() * 0.3;
+    const isADS = this.mouseADS || this.gamepadADS;
+    const moveSpread = this.movement.hSpeed() * (isADS ? 0.1 : 0.3);
 
     const ch = document.getElementById('crosshair');
     if (ch) {
@@ -863,7 +868,9 @@ export class Player {
     const startPos = this.group.position.clone().add(aimDir.clone().multiplyScalar(0.5));
 
     const pellets = weapon.bulletsPerShot;
-    const spreadRad = (weapon.spread * Math.PI) / 180;
+    const isADS = this.mouseADS || this.gamepadADS;
+    const adsSpreadMult = isADS ? 0.3 : 1.0; // ADS tightens spread significantly
+    const spreadRad = (weapon.spread * adsSpreadMult * Math.PI) / 180;
 
     for (let p = 0; p < pellets; p++) {
       let shotDir = aimDir.clone();
@@ -891,7 +898,9 @@ export class Player {
     }
 
     const recoil = weapon.recoil;
-    this.crosshairSpread = Math.min(12, this.crosshairSpread + recoil.y * 2);
+    const recoilMult = isADS ? 0.5 : 1.0;
+    this.crosshairSpread = Math.min(12, this.crosshairSpread + recoil.y * 2 * recoilMult);
+    this.weaponRecoilKick = Math.min(1, this.weaponRecoilKick + recoil.y * 0.25 * recoilMult);
 
     if (weapon.muzzleFlash) {
       this.impactRenderer.spawnMuzzleFlash(startPos, aimDir, DEFAULT_MUZZLE_CONFIG);
@@ -1140,8 +1149,36 @@ export class Player {
     this.camera.updateProjectionMatrix();
 
     if (this.weaponMesh) {
-      const target = isADS ? this.adsPos : this.hipfirePos;
-      this.weaponMesh.position.lerp(target, 0.12);
+      const target = isADS ? this.adsPos.clone() : this.hipfirePos.clone();
+      const speed = this.movement.hSpeed();
+
+      // Weapon bob while moving on ground
+      if (speed > 1 && this.movement.isGrounded) {
+        const bobFreq = isADS ? 6 : 10;
+        const bobAmpX = isADS ? 0.002 : 0.008;
+        const bobAmpY = isADS ? 0.002 : 0.006;
+        this.weaponBobTime += speed * 0.06;
+        target.x += Math.sin(this.weaponBobTime * bobFreq) * bobAmpX;
+        target.y += Math.abs(Math.sin(this.weaponBobTime * bobFreq * 0.5)) * bobAmpY;
+      } else {
+        // Slowly reset bob phase when not moving
+        this.weaponBobTime *= 0.95;
+      }
+
+      // Idle sway (uses weapon accuracy — higher accuracy = less sway)
+      const swayAmount = isADS ? 0.0005 : 0.002 * this.activeWeapon.accuracy;
+      const t = performance.now() * 0.001;
+      this.weaponSwayX += (Math.sin(t * 1.1) * swayAmount - this.weaponSwayX) * 0.05;
+      this.weaponSwayY += (Math.cos(t * 0.9) * swayAmount - this.weaponSwayY) * 0.05;
+      target.x += this.weaponSwayX;
+      target.y += this.weaponSwayY;
+
+      // Recoil kick (pushes weapon back and up, then decays)
+      this.weaponRecoilKick *= 0.85;
+      target.z += this.weaponRecoilKick * 0.06;
+      target.y += this.weaponRecoilKick * 0.01;
+
+      this.weaponMesh.position.lerp(target, 0.15);
     }
   }
 

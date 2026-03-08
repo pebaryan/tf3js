@@ -43,6 +43,57 @@ export const ACTION_LABELS: Record<keyof Bindings, string> = {
   mainMenu:  'Main Menu',
 };
 
+// --- Aim response curves (gamepad only) ---
+
+export type AimCurve = 'classic' | 'steady' | 'fine' | 'linear';
+
+export const AIM_CURVE_LABELS: Record<AimCurve, string> = {
+  classic: 'Classic',
+  steady:  'Steady',
+  fine:    'Fine',
+  linear:  'Linear',
+};
+
+/**
+ * Apply a response curve to a raw stick axis value (-1 to 1).
+ *
+ * - Classic: gentle acceleration (TF2 default) — power curve ~2.5
+ * - Steady:  moderate curve ~2.0, smoother mid-range tracking
+ * - Fine:    high exponent ~3.5 for precise small adjustments, fast snaps
+ * - Linear:  1:1 mapping, no curve applied
+ */
+export function applyAimCurve(raw: number, curve: AimCurve): number {
+  const sign = Math.sign(raw);
+  const abs = Math.abs(raw);
+  switch (curve) {
+    case 'classic': return sign * Math.pow(abs, 2.5);
+    case 'steady':  return sign * Math.pow(abs, 2.0);
+    case 'fine':    return sign * Math.pow(abs, 3.5);
+    case 'linear':  return raw;
+  }
+}
+
+const AIM_CURVE_STORAGE_KEY = 'tf3js_aim_curve';
+let _cachedCurve: AimCurve | null = null;
+
+export function getAimCurve(): AimCurve {
+  if (_cachedCurve) return _cachedCurve;
+  try {
+    const stored = localStorage.getItem(AIM_CURVE_STORAGE_KEY);
+    if (stored && stored in AIM_CURVE_LABELS) {
+      _cachedCurve = stored as AimCurve;
+      return _cachedCurve;
+    }
+  } catch {}
+  _cachedCurve = 'classic';
+  return _cachedCurve;
+}
+
+export function setAimCurve(curve: AimCurve): void {
+  _cachedCurve = curve;
+  localStorage.setItem(AIM_CURVE_STORAGE_KEY, curve);
+}
+
 const STORAGE_KEY = 'tf3js_keybindings';
 
 let _cached: Bindings | null = null;

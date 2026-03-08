@@ -1,6 +1,6 @@
 import { GameState, GameStats } from './types';
 import { Level, LevelType } from './levels';
-import { Bindings, DEFAULT_BINDINGS, ACTION_LABELS, getBindings, setBindings, keyCodeToLabel } from './keybindings';
+import { Bindings, DEFAULT_BINDINGS, ACTION_LABELS, getBindings, setBindings, keyCodeToLabel, AimCurve, AIM_CURVE_LABELS, getAimCurve, setAimCurve } from './keybindings';
 
 export interface HUDUpdateData {
   currentLevel: Level;
@@ -748,6 +748,7 @@ export class GameUI {
 
     document.getElementById('controls-reset-btn')!.onclick = () => {
       setBindings({ ...DEFAULT_BINDINGS });
+      setAimCurve('classic');
       this.rebuildControlsList();
     };
     document.getElementById('controls-back-btn')!.onclick = () => {
@@ -792,6 +793,35 @@ export class GameUI {
       row.appendChild(bindingsContainer);
       list.appendChild(row);
     }
+
+    // Aim curve selector (gamepad only)
+    const curveRow = document.createElement('div');
+    curveRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid #333;';
+
+    const curveLabel = document.createElement('span');
+    curveLabel.textContent = 'Aim Response Curve';
+    curveLabel.style.cssText = 'font-size:14px;color:#ff6600;min-width:160px;text-align:left;flex-shrink:0;';
+
+    const curveSelect = document.createElement('div');
+    curveSelect.style.cssText = 'display:flex;gap:4px;flex-shrink:0;';
+
+    const currentCurve = getAimCurve();
+    for (const key of Object.keys(AIM_CURVE_LABELS) as AimCurve[]) {
+      const btn = document.createElement('button');
+      btn.className = 'menu-button';
+      const isActive = key === currentCurve;
+      btn.style.cssText = `width:auto;margin:0;padding:6px 10px;font-size:12px;${isActive ? 'background:#00ffcc;color:#000;' : 'background:#222;color:#888;border:1px solid #444;'}`;
+      btn.textContent = AIM_CURVE_LABELS[key];
+      btn.onclick = () => {
+        setAimCurve(key);
+        this.rebuildControlsList();
+      };
+      curveSelect.appendChild(btn);
+    }
+
+    curveRow.appendChild(curveLabel);
+    curveRow.appendChild(curveSelect);
+    list.appendChild(curveRow);
   }
 
   private getControllerLabel(action: keyof Bindings): string {

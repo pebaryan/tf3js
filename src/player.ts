@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import * as CANNON from "cannon-es";
-import { getBindings } from "./keybindings";
+import { getBindings, getAimCurve, applyAimCurve } from "./keybindings";
 import { Weapon, WeaponManager, R201_WEAPON } from "./weapons";
 import { BallisticsSystem, Bullet } from "./ballistics";
 import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG, DEFAULT_MUZZLE_CONFIG, EPG_EXPLOSION_CONFIG, FRAG_EXPLOSION_CONFIG } from "./effects";
@@ -472,7 +472,13 @@ export class Player {
       return Math.abs(v) > dz ? v * sens : 0;
     };
     this.gamepadMove.set(ax(0, moveSens), ax(1, moveSens));
-    this.gamepadLook.set(ax(2, lookSens), ax(3, lookSens));
+    const curve = getAimCurve();
+    const rawLookX = Math.abs(gp.axes[2]) > dz ? gp.axes[2] : 0;
+    const rawLookY = Math.abs(gp.axes[3]) > dz ? gp.axes[3] : 0;
+    this.gamepadLook.set(
+      applyAimCurve(rawLookX, curve) * lookSens,
+      applyAimCurve(rawLookY, curve) * lookSens,
+    );
 
     // Ninja layout: LB=jump, RB=crouch, LT=ADS, RT=fire
     const lb = gp.buttons[4]?.pressed ?? false;

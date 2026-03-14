@@ -6,7 +6,7 @@ export interface BulletVisuals {
   hasTrail: boolean;
   trailColor: number;
   trailLength: number; // max trail positions
-  gravity: number; // per-frame gravity, e.g. -35 for player, 0 for titan
+  gravity: number; // per-second gravity applied to velocity.y (0 = straight, negative = drop)
   maxLifetime: number; // seconds before forced removal
   explosive: boolean; // triggers explosion on impact
   splashRadius: number; // radius of splash damage (0 = no splash)
@@ -20,7 +20,6 @@ export interface Weapon {
   accuracy: number; // 0.0-1.0, lower = more stable
   bulletSpeed: number;
   fireRate: number; // milliseconds between shots
-  trajectory: 'straight' | 'parabolic';
   spread: number; // degrees
   bulletsPerShot: number; // 1 for single, >1 for shotgun
   magazineSize: number;
@@ -32,6 +31,7 @@ export interface Weapon {
 
 // --- Pilot weapons ---
 
+// R-201: Versatile assault rifle, the baseline. ~810 RPM, balanced stats.
 export const R201_WEAPON: Weapon = {
   name: 'R-201',
   damage: 25,
@@ -39,8 +39,7 @@ export const R201_WEAPON: Weapon = {
   recoil: { x: 0.3, y: 0.8, z: 0 },
   accuracy: 0.15,
   bulletSpeed: 120,
-  fireRate: 100,
-  trajectory: 'parabolic',
+  fireRate: 74,   // ~810 RPM
   spread: 1.5,
   bulletsPerShot: 1,
   magazineSize: 24,
@@ -55,13 +54,14 @@ export const R201_WEAPON: Weapon = {
     hasTrail: true,
     trailColor: 0x00ffcc,
     trailLength: 20,
-    gravity: -35,
+    gravity: -25,
     maxLifetime: 3,
     explosive: false,
     splashRadius: 0,
   },
 };
 
+// EVA-8: Auto shotgun. Fast fire for a shotgun, wide spread, short range.
 export const EVA8_WEAPON: Weapon = {
   name: 'EVA-8',
   damage: 12,
@@ -70,7 +70,6 @@ export const EVA8_WEAPON: Weapon = {
   accuracy: 0.6,
   bulletSpeed: 80,
   fireRate: 400,
-  trajectory: 'straight',
   spread: 8,
   bulletsPerShot: 8,
   magazineSize: 6,
@@ -85,13 +84,14 @@ export const EVA8_WEAPON: Weapon = {
     hasTrail: false,
     trailColor: 0xff8844,
     trailLength: 0,
-    gravity: -20,
+    gravity: -10,    // pellets drop fast but short lifetime compensates
     maxLifetime: 0.8,
     explosive: false,
     splashRadius: 0,
   },
 };
 
+// Kraber: Anti-materiel sniper. Bolt-action, one-shot kill, heavy bullet drop at range.
 export const KRABER_WEAPON: Weapon = {
   name: 'Kraber',
   damage: 100,
@@ -100,7 +100,6 @@ export const KRABER_WEAPON: Weapon = {
   accuracy: 0.02,
   bulletSpeed: 250,
   fireRate: 1500,
-  trajectory: 'parabolic',
   spread: 0.2,
   bulletsPerShot: 1,
   magazineSize: 4,
@@ -122,6 +121,7 @@ export const KRABER_WEAPON: Weapon = {
   },
 };
 
+// EPG-1: Energy grenade launcher. Slow projectile, splash damage, arc trajectory.
 export const EPG_WEAPON: Weapon = {
   name: 'EPG-1',
   damage: 80,
@@ -130,7 +130,6 @@ export const EPG_WEAPON: Weapon = {
   accuracy: 0.05,
   bulletSpeed: 40,
   fireRate: 900,
-  trajectory: 'parabolic',
   spread: 0,
   bulletsPerShot: 1,
   magazineSize: 5,
@@ -152,6 +151,186 @@ export const EPG_WEAPON: Weapon = {
   },
 };
 
+// Alternator: Slow-firing SMG with high damage per bullet. ~360 RPM, punchy.
+export const ALTERNATOR_WEAPON: Weapon = {
+  name: 'Alternator',
+  damage: 35,
+  range: 120,
+  recoil: { x: 0.6, y: 1.0, z: 0 },
+  accuracy: 0.18,
+  bulletSpeed: 110,
+  fireRate: 167,   // ~360 RPM — slow but hits hard
+  spread: 2.0,
+  bulletsPerShot: 1,
+  magazineSize: 20,
+  reloadTime: 1600,
+  muzzleFlash: true,
+  soundId: 'rifle_fire',
+  bulletVisuals: {
+    meshType: 'capsule',
+    color: 0xffaa00,
+    radius: 0.02,
+    length: 0.06,
+    hasTrail: true,
+    trailColor: 0xffaa00,
+    trailLength: 15,
+    gravity: -25,
+    maxLifetime: 2.5,
+    explosive: false,
+    splashRadius: 0,
+  },
+};
+
+// CAR: High fire rate SMG, very accurate, low damage per shot. ~900 RPM.
+export const CAR_WEAPON: Weapon = {
+  name: 'CAR',
+  damage: 18,
+  range: 140,
+  recoil: { x: 0.25, y: 0.5, z: 0 },
+  accuracy: 0.12,
+  bulletSpeed: 115,
+  fireRate: 67,    // ~900 RPM — bullet hose
+  spread: 2.0,
+  bulletsPerShot: 1,
+  magazineSize: 25,
+  reloadTime: 1500,
+  muzzleFlash: true,
+  soundId: 'rifle_fire',
+  bulletVisuals: {
+    meshType: 'capsule',
+    color: 0x66ffcc,
+    radius: 0.018,
+    length: 0.06,
+    hasTrail: true,
+    trailColor: 0x66ffcc,
+    trailLength: 18,
+    gravity: -25,
+    maxLifetime: 2.5,
+    explosive: false,
+    splashRadius: 0,
+  },
+};
+
+// Flatline: Heavy AR. Higher damage than R-201, more horizontal recoil, slower fire. ~540 RPM.
+export const FLATLINE_WEAPON: Weapon = {
+  name: 'Flatline',
+  damage: 30,
+  range: 180,
+  recoil: { x: 1.0, y: 1.0, z: 0 },  // more horizontal kick than R-201
+  accuracy: 0.22,
+  bulletSpeed: 110,
+  fireRate: 111,   // ~540 RPM
+  spread: 2.0,
+  bulletsPerShot: 1,
+  magazineSize: 20,
+  reloadTime: 2000,
+  muzzleFlash: true,
+  soundId: 'rifle_fire',
+  bulletVisuals: {
+    meshType: 'capsule',
+    color: 0xff4400,
+    radius: 0.025,
+    length: 0.08,
+    hasTrail: true,
+    trailColor: 0xff4400,
+    trailLength: 18,
+    gravity: -25,
+    maxLifetime: 3,
+    explosive: false,
+    splashRadius: 0,
+  },
+};
+
+// Mastiff: Energy shotgun. Horizontal spread, slow fire, devastating up close.
+export const MASTIFF_WEAPON: Weapon = {
+  name: 'Mastiff',
+  damage: 18,
+  range: 25,
+  recoil: { x: 1.5, y: 3.0, z: 0 },
+  accuracy: 0.5,
+  bulletSpeed: 70,
+  fireRate: 600,
+  spread: 12,
+  bulletsPerShot: 6,
+  magazineSize: 4,
+  reloadTime: 2800,
+  muzzleFlash: true,
+  soundId: 'shotgun_fire',
+  bulletVisuals: {
+    meshType: 'sphere',
+    color: 0x88ccff,
+    radius: 0.02,
+    length: 0,
+    hasTrail: true,
+    trailColor: 0x88ccff,
+    trailLength: 8,
+    gravity: -8,     // energy pellets, less drop than ballistic
+    maxLifetime: 0.6,
+    explosive: false,
+    splashRadius: 0,
+  },
+};
+
+// Wingman Elite: Heavy revolver. High damage, slow fire, precise. ~240 RPM.
+export const WINGMAN_WEAPON: Weapon = {
+  name: 'Wingman',
+  damage: 55,
+  range: 250,
+  recoil: { x: 0.4, y: 2.5, z: 0 },
+  accuracy: 0.05,
+  bulletSpeed: 160,
+  fireRate: 250,   // ~240 RPM — deliberate, rewarding shots
+  spread: 0.5,
+  bulletsPerShot: 1,
+  magazineSize: 6,
+  reloadTime: 2000,
+  muzzleFlash: true,
+  soundId: 'sniper_fire',
+  bulletVisuals: {
+    meshType: 'capsule',
+    color: 0xff6644,
+    radius: 0.025,
+    length: 0.1,
+    hasTrail: true,
+    trailColor: 0xff8866,
+    trailLength: 12,
+    gravity: -20,
+    maxLifetime: 3,
+    explosive: false,
+    splashRadius: 0,
+  },
+};
+
+// L-STAR: Energy LMG. Large slow projectiles, no bullet drop, high spread. ~480 RPM.
+export const LSTAR_WEAPON: Weapon = {
+  name: 'L-STAR',
+  damage: 22,
+  range: 100,
+  recoil: { x: 0.3, y: 0.4, z: 0 },
+  accuracy: 0.3,
+  bulletSpeed: 60,
+  fireRate: 125,   // ~480 RPM
+  spread: 3.0,
+  bulletsPerShot: 1,
+  magazineSize: 40,
+  reloadTime: 2500,
+  muzzleFlash: true,
+  soundId: 'grenade_fire',
+  bulletVisuals: {
+    meshType: 'sphere',
+    color: 0x22ff44,
+    radius: 0.06,
+    length: 0,
+    hasTrail: true,
+    trailColor: 0x44ff66,
+    trailLength: 25,
+    gravity: 0,      // energy orbs, no drop
+    maxLifetime: 2,
+    explosive: false,
+    splashRadius: 0,
+  },
+};
+
 // --- Pilot weapon loadout ---
 
 export const PILOT_WEAPONS: Weapon[] = [
@@ -159,6 +338,12 @@ export const PILOT_WEAPONS: Weapon[] = [
   EVA8_WEAPON,
   KRABER_WEAPON,
   EPG_WEAPON,
+  ALTERNATOR_WEAPON,
+  CAR_WEAPON,
+  FLATLINE_WEAPON,
+  MASTIFF_WEAPON,
+  WINGMAN_WEAPON,
+  LSTAR_WEAPON,
 ];
 
 // --- Titan weapon ---
@@ -171,7 +356,6 @@ export const TITAN_WEAPON: Weapon = {
   accuracy: 0.1,
   bulletSpeed: 150,
   fireRate: 150,
-  trajectory: 'straight',
   spread: 0.5,
   bulletsPerShot: 1,
   magazineSize: 100,

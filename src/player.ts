@@ -240,6 +240,76 @@ export class Player {
       body.position.set(0, -0.01, 0.07); gun.add(body);
       const cell = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 10), accentMat);
       cell.position.set(0, -0.01, 0.18); gun.add(cell);
+    } else if (name === 'Alternator') {
+      // Dual barrel SMG
+      const barrelL = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.015, 0.3, 8), bodyMat);
+      barrelL.rotation.x = Math.PI / 2; barrelL.position.set(-0.02, 0.01, -0.1); gun.add(barrelL);
+      const barrelR = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.015, 0.3, 8), bodyMat);
+      barrelR.rotation.x = Math.PI / 2; barrelR.position.set(0.02, 0.01, -0.1); gun.add(barrelR);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.045, 0.16), bodyMat);
+      body.position.set(0, -0.01, 0.06); gun.add(body);
+      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.07, 0.025), accentMat);
+      mag.position.set(0, -0.05, 0.04); gun.add(mag);
+      const muzzleL = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.012, 0.03, 8), accentMat);
+      muzzleL.rotation.x = Math.PI / 2; muzzleL.position.set(-0.02, 0.01, -0.26); gun.add(muzzleL);
+      const muzzleR = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.012, 0.03, 8), accentMat);
+      muzzleR.rotation.x = Math.PI / 2; muzzleR.position.set(0.02, 0.01, -0.26); gun.add(muzzleR);
+    } else if (name === 'CAR') {
+      // Compact SMG
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.016, 0.28, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.1); gun.add(barrel);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.04, 0.18), bodyMat);
+      body.position.set(0, -0.01, 0.04); gun.add(body);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.04, 0.06), bodyMat);
+      stock.position.set(0, -0.005, 0.17); gun.add(stock);
+      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.065, 0.025), accentMat);
+      mag.position.set(0, -0.045, 0.02); gun.add(mag);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.008, 0.1), accentMat);
+      rail.position.set(0, 0.025, -0.02); gun.add(rail);
+    } else if (name === 'Flatline') {
+      // Heavy assault rifle with angular body
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.38, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.15); gun.add(barrel);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 0.22), bodyMat);
+      body.position.set(0, -0.01, 0.06); gun.add(body);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.065, 0.1), bodyMat);
+      stock.position.set(0, -0.01, 0.22); gun.add(stock);
+      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 0.03), accentMat);
+      mag.position.set(0, -0.065, 0.04); gun.add(mag);
+      const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.018, 0.04, 8), accentMat);
+      muzzle.rotation.x = Math.PI / 2; muzzle.position.set(0, 0.01, -0.34); gun.add(muzzle);
+    } else if (name === 'Mastiff') {
+      // Energy shotgun, wide barrel
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.25, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.08); gun.add(barrel);
+      const choke = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.03, 0.04, 8), accentMat);
+      choke.rotation.x = Math.PI / 2; choke.position.set(0, 0.01, -0.22); gun.add(choke);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.15), bodyMat);
+      body.position.set(0, -0.01, 0.08); gun.add(body);
+      const cell = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.04, 0.05), accentMat);
+      cell.position.set(0, -0.04, 0.12); gun.add(cell);
+    } else if (name === 'Wingman') {
+      // Revolver style
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.016, 0.18, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.015, -0.06); gun.add(barrel);
+      const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.04, 8), accentMat);
+      cylinder.rotation.z = Math.PI / 2; cylinder.position.set(0, 0.0, 0.04); gun.add(cylinder);
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.04, 0.1), bodyMat);
+      frame.position.set(0, -0.005, 0.06); gun.add(frame);
+      const hammer = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.025, 0.015), bodyMat);
+      hammer.position.set(0, 0.025, 0.1); gun.add(hammer);
+    } else if (name === 'L-STAR') {
+      // Energy LMG, bulky with glowing elements
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.3, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.12); gun.add(barrel);
+      const shroud = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.08, 8), accentMat);
+      shroud.rotation.x = Math.PI / 2; shroud.position.set(0, 0.01, -0.2); gun.add(shroud);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.06, 0.2), bodyMat);
+      body.position.set(0, -0.01, 0.07); gun.add(body);
+      const cell = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 8), accentMat);
+      cell.position.set(0, -0.02, 0.18); gun.add(cell);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.012, 0.12), accentMat);
+      rail.position.set(0, 0.035, -0.02); gun.add(rail);
     } else {
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.3), bodyMat);
       gun.add(body);

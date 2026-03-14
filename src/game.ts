@@ -8,7 +8,7 @@ import { Player } from './player';
 import { Titan, TitanState } from './titan';
 import { GameState, GameStats } from './types';
 import { GameUI } from './ui';
-import { Weapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON } from './weapons';
+import { Weapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
 // import { soundManager } from './sound';
 
 interface WeaponPickup {
@@ -575,6 +575,12 @@ export class Game {
       { weapon: EVA8_WEAPON, pos: new THREE.Vector3(-7, 1.5, -35) },
       { weapon: KRABER_WEAPON, pos: new THREE.Vector3(7, 1.5, -35) },
       { weapon: EPG_WEAPON, pos: new THREE.Vector3(0, 0.5, -55) },
+      { weapon: ALTERNATOR_WEAPON, pos: new THREE.Vector3(-12, 1.5, -20) },
+      { weapon: CAR_WEAPON, pos: new THREE.Vector3(12, 1.5, -20) },
+      { weapon: FLATLINE_WEAPON, pos: new THREE.Vector3(-10, 1.5, -50) },
+      { weapon: MASTIFF_WEAPON, pos: new THREE.Vector3(10, 1.5, -50) },
+      { weapon: WINGMAN_WEAPON, pos: new THREE.Vector3(-5, 1.5, -70) },
+      { weapon: LSTAR_WEAPON, pos: new THREE.Vector3(5, 1.5, -70) },
     ];
 
     for (const def of pickupDefs) {

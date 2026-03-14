@@ -93,6 +93,7 @@ export class Player {
   private weaponMesh: THREE.Group | null = null;
   private readonly hipfirePos = new THREE.Vector3(0.25, -0.22, -0.4);
   private readonly adsPos = new THREE.Vector3(0, -0.13, -0.35);
+  private weaponViewOffset = this.hipfirePos.clone();
   private weaponBobTime = 0;
   private weaponRecoilKick = 0; // current recoil animation (0-1, decays to 0)
   private weaponSwayX = 0;
@@ -132,6 +133,7 @@ export class Player {
   private gamepadMenuPrev = false;
   private keyboardEmbarkStartTime = 0;
   private hasTriggeredEmbark = false;
+  private suppressInteractRelease = false;
   private readonly DISENGAGE_HOLD_TIME = 1.0;
   private readonly EMBARK_COOLDOWN = 2.0;
   private lastEmbarkTime = 0;
@@ -181,8 +183,9 @@ export class Player {
   /* ------------------------------------------------------------------ */
 
   private rebuildWeaponMesh() {
+    console.log('[Player] rebuildWeaponMesh called for', this.activeWeapon?.name);
     if (this.weaponMesh) {
-      this.camera.remove(this.weaponMesh);
+      this.scene.remove(this.weaponMesh);
       this.weaponMesh.traverse((child) => {
         if (child instanceof THREE.Mesh) {
           child.geometry.dispose();
@@ -240,76 +243,6 @@ export class Player {
       body.position.set(0, -0.01, 0.07); gun.add(body);
       const cell = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 10), accentMat);
       cell.position.set(0, -0.01, 0.18); gun.add(cell);
-    } else if (name === 'Alternator') {
-      // Dual barrel SMG
-      const barrelL = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.015, 0.3, 8), bodyMat);
-      barrelL.rotation.x = Math.PI / 2; barrelL.position.set(-0.02, 0.01, -0.1); gun.add(barrelL);
-      const barrelR = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.015, 0.3, 8), bodyMat);
-      barrelR.rotation.x = Math.PI / 2; barrelR.position.set(0.02, 0.01, -0.1); gun.add(barrelR);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.045, 0.16), bodyMat);
-      body.position.set(0, -0.01, 0.06); gun.add(body);
-      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.07, 0.025), accentMat);
-      mag.position.set(0, -0.05, 0.04); gun.add(mag);
-      const muzzleL = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.012, 0.03, 8), accentMat);
-      muzzleL.rotation.x = Math.PI / 2; muzzleL.position.set(-0.02, 0.01, -0.26); gun.add(muzzleL);
-      const muzzleR = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.012, 0.03, 8), accentMat);
-      muzzleR.rotation.x = Math.PI / 2; muzzleR.position.set(0.02, 0.01, -0.26); gun.add(muzzleR);
-    } else if (name === 'CAR') {
-      // Compact SMG
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.016, 0.28, 8), bodyMat);
-      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.1); gun.add(barrel);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.04, 0.18), bodyMat);
-      body.position.set(0, -0.01, 0.04); gun.add(body);
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.04, 0.06), bodyMat);
-      stock.position.set(0, -0.005, 0.17); gun.add(stock);
-      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.065, 0.025), accentMat);
-      mag.position.set(0, -0.045, 0.02); gun.add(mag);
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.008, 0.1), accentMat);
-      rail.position.set(0, 0.025, -0.02); gun.add(rail);
-    } else if (name === 'Flatline') {
-      // Heavy assault rifle with angular body
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.38, 8), bodyMat);
-      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.15); gun.add(barrel);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 0.22), bodyMat);
-      body.position.set(0, -0.01, 0.06); gun.add(body);
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.065, 0.1), bodyMat);
-      stock.position.set(0, -0.01, 0.22); gun.add(stock);
-      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 0.03), accentMat);
-      mag.position.set(0, -0.065, 0.04); gun.add(mag);
-      const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.018, 0.04, 8), accentMat);
-      muzzle.rotation.x = Math.PI / 2; muzzle.position.set(0, 0.01, -0.34); gun.add(muzzle);
-    } else if (name === 'Mastiff') {
-      // Energy shotgun, wide barrel
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.25, 8), bodyMat);
-      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.08); gun.add(barrel);
-      const choke = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.03, 0.04, 8), accentMat);
-      choke.rotation.x = Math.PI / 2; choke.position.set(0, 0.01, -0.22); gun.add(choke);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.15), bodyMat);
-      body.position.set(0, -0.01, 0.08); gun.add(body);
-      const cell = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.04, 0.05), accentMat);
-      cell.position.set(0, -0.04, 0.12); gun.add(cell);
-    } else if (name === 'Wingman') {
-      // Revolver style
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.016, 0.18, 8), bodyMat);
-      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.015, -0.06); gun.add(barrel);
-      const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.04, 8), accentMat);
-      cylinder.rotation.z = Math.PI / 2; cylinder.position.set(0, 0.0, 0.04); gun.add(cylinder);
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.04, 0.1), bodyMat);
-      frame.position.set(0, -0.005, 0.06); gun.add(frame);
-      const hammer = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.025, 0.015), bodyMat);
-      hammer.position.set(0, 0.025, 0.1); gun.add(hammer);
-    } else if (name === 'L-STAR') {
-      // Energy LMG, bulky with glowing elements
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.3, 8), bodyMat);
-      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.12); gun.add(barrel);
-      const shroud = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.08, 8), accentMat);
-      shroud.rotation.x = Math.PI / 2; shroud.position.set(0, 0.01, -0.2); gun.add(shroud);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.06, 0.2), bodyMat);
-      body.position.set(0, -0.01, 0.07); gun.add(body);
-      const cell = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 8), accentMat);
-      cell.position.set(0, -0.02, 0.18); gun.add(cell);
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.012, 0.12), accentMat);
-      rail.position.set(0, 0.035, -0.02); gun.add(rail);
     } else {
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.3), bodyMat);
       gun.add(body);
@@ -321,9 +254,110 @@ export class Player {
     const guard = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.008, 0.04), bodyMat);
     guard.position.set(0, -0.03, 0.02); gun.add(guard);
 
-    gun.position.copy(this.hipfirePos);
-    this.camera.add(gun);
+    gun.renderOrder = 900;
+    gun.frustumCulled = false;
+    gun.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.renderOrder = 900;
+      child.frustumCulled = false;
+
+      const material = child.material as THREE.Material & {
+        depthTest?: boolean;
+        depthWrite?: boolean;
+        fog?: boolean;
+        opacity?: number;
+        transparent?: boolean;
+        toneMapped?: boolean;
+      };
+      material.transparent = true;
+      material.opacity = 1;
+      material.depthTest = false;
+      material.depthWrite = false;
+      material.fog = false;
+      material.toneMapped = false;
+    });
+
+    this.weaponViewOffset.copy(this.hipfirePos);
+    this.scene.add(gun);
     this.weaponMesh = gun;
+    this.syncWeaponMeshToCamera();
+    console.log('[Player] Weapon mesh created and added to camera');
+    console.log('[Player] Weapon mesh children:', gun.children.length);
+  }
+
+  private syncWeaponMeshToCamera(): void {
+    if (!this.weaponMesh) return;
+
+    const offset = this.weaponViewOffset.clone().applyQuaternion(this.camera.quaternion);
+    this.weaponMesh.position.copy(this.camera.position).add(offset);
+    this.weaponMesh.quaternion.copy(this.camera.quaternion);
+  }
+
+  private syncViewmodelAnchors(): void {
+    this.camera.quaternion.setFromEuler(this.euler);
+    this.camera.position.copy(this.group.position);
+    this.camera.position.y += 0.5;
+    this.syncWeaponMeshToCamera();
+  }
+
+  private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
+    switch (this.activeWeapon.name) {
+      case 'R-201':
+        return new THREE.Vector3(0, 0.01, -0.35);
+      case 'EVA-8':
+        return new THREE.Vector3(0, 0.01, -0.25);
+      case 'Kraber':
+        return new THREE.Vector3(0, 0.01, -0.48);
+      case 'EPG-1':
+        return new THREE.Vector3(0, 0.01, -0.2);
+      default:
+        return new THREE.Vector3(0, 0, -0.18);
+    }
+  }
+
+  private getWeaponMuzzlePosition(aimDir: THREE.Vector3): THREE.Vector3 {
+    this.syncViewmodelAnchors();
+
+    if (!this.weaponMesh) {
+      return this.camera.position.clone().add(aimDir.clone().multiplyScalar(0.5));
+    }
+
+    this.weaponMesh.updateWorldMatrix(true, false);
+    return this.weaponMesh.localToWorld(this.getWeaponMuzzleLocalOffset());
+  }
+
+  private getShotDirection(
+    weapon: Weapon,
+    aimDir: THREE.Vector3,
+    spreadRad: number,
+    pelletIndex: number,
+    pelletCount: number,
+  ): THREE.Vector3 {
+    if (spreadRad <= 0) return aimDir.clone();
+
+    const right = new THREE.Vector3().crossVectors(aimDir, new THREE.Vector3(0, 1, 0));
+    if (right.lengthSq() < 1e-6) {
+      right.set(1, 0, 0);
+    } else {
+      right.normalize();
+    }
+
+    const up = new THREE.Vector3().crossVectors(right, aimDir).normalize();
+
+    if (weapon.name === 'Mastiff' && pelletCount > 1) {
+      const t = pelletCount === 1 ? 0 : pelletIndex / (pelletCount - 1);
+      const angleOffset = (t - 0.5) * 2 * spreadRad;
+      return aimDir.clone().applyQuaternion(
+        new THREE.Quaternion().setFromAxisAngle(up, angleOffset),
+      );
+    }
+
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.random() * spreadRad;
+    return aimDir.clone()
+      .add(right.multiplyScalar(Math.cos(angle) * radius))
+      .add(up.multiplyScalar(Math.sin(angle) * radius))
+      .normalize();
   }
 
   /* ------------------------------------------------------------------ */
@@ -403,6 +437,7 @@ export class Player {
       this.keys.embark = true;
       this.keyboardEmbarkStartTime = performance.now();
       this.hasTriggeredEmbark = false;
+      this.suppressInteractRelease = false;
     }
     // Reload
     else if (e.code === 'KeyR') { if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); } this.updateWeaponHUD(); }
@@ -427,10 +462,12 @@ export class Player {
     else if (e.code === b.embark)    {
       this.keys.embark = false;
       const holdDuration = (performance.now() - this.keyboardEmbarkStartTime) / 1000;
-      if (!this.hasTriggeredEmbark && holdDuration < this.DISENGAGE_HOLD_TIME && this.onEmbarkTitan) {
+      if (!this.hasTriggeredEmbark && !this.suppressInteractRelease && holdDuration < this.DISENGAGE_HOLD_TIME && this.onEmbarkTitan) {
         this.lastEmbarkTime = performance.now();
         this.onEmbarkTitan();
       }
+      this.hasTriggeredEmbark = false;
+      this.suppressInteractRelease = false;
     }
     else if (e.code === 'KeyQ') { this.grappleKeyHeld = false; this.stopGrapple(); }
   }
@@ -525,6 +562,27 @@ export class Player {
     this.movement.vel.set(x, y, z);
   }
 
+  isADSActive(): boolean {
+    return this.mouseADS || this.gamepadADS;
+  }
+
+  shouldShowSniperScope(): boolean {
+    return !this.isPilotingTitan && this.activeWeapon.name === 'Kraber' && this.isADSActive();
+  }
+
+  isInteractHeld(): boolean {
+    return this.keys.embark || this.gamepadButtonXHoldTime > 0;
+  }
+
+  consumeInteractHold(): void {
+    this.hasTriggeredEmbark = true;
+    this.suppressInteractRelease = true;
+  }
+
+  isInteractConsumed(): boolean {
+    return this.suppressInteractRelease;
+  }
+
   getVelocity(): THREE.Vector3 {
     return this.movement.vel;
   }
@@ -591,6 +649,10 @@ export class Player {
 
     // Button X: Short press = reload / embark, Hold = disembark
     if (buttonX) {
+      if (this.gamepadButtonXHoldTime === 0) {
+        this.hasTriggeredEmbark = false;
+        this.suppressInteractRelease = false;
+      }
       if (!this.isDisembarking) {
         this.gamepadButtonXHoldTime += 0.016;
         const timeSinceEmbark = (performance.now() - this.lastEmbarkTime) / 1000;
@@ -602,7 +664,11 @@ export class Player {
         }
       }
     } else {
-      if (this.gamepadButtonXHoldTime > 0 && this.gamepadButtonXHoldTime < this.DISENGAGE_HOLD_TIME) {
+      if (
+        this.gamepadButtonXHoldTime > 0 &&
+        this.gamepadButtonXHoldTime < this.DISENGAGE_HOLD_TIME &&
+        !this.suppressInteractRelease
+      ) {
         if (this.onEmbarkTitan) {
           this.lastEmbarkTime = performance.now();
           this.onEmbarkTitan();
@@ -613,6 +679,8 @@ export class Player {
       }
       this.gamepadButtonXHoldTime = 0;
       this.isDisembarking = false;
+      this.hasTriggeredEmbark = false;
+      this.suppressInteractRelease = false;
     }
 
     // D-pad down to call Titan
@@ -662,7 +730,7 @@ export class Player {
 
   private getMeshes(): THREE.Mesh[] {
     return this.scene.children.filter(
-      (o) => o instanceof THREE.Mesh,
+      (o) => o instanceof THREE.Mesh && !o.userData.ignoreRaycast,
     ) as THREE.Mesh[];
   }
 
@@ -931,6 +999,8 @@ export class Player {
 
   private shoot() {
     const weapon = this.activeWeapon;
+    const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    const startPos = this.getWeaponMuzzlePosition(aimDir);
 
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
@@ -940,12 +1010,8 @@ export class Player {
     if (intersects.length > 0 && intersects[0].distance < 200) {
       targetPoint = intersects[0].point;
     } else {
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-      targetPoint = this.camera.position.clone().add(fwd.multiplyScalar(50));
+      targetPoint = this.camera.position.clone().add(aimDir.clone().multiplyScalar(50));
     }
-
-    const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-    const startPos = this.group.position.clone().add(aimDir.clone().multiplyScalar(0.5));
 
     const pellets = weapon.bulletsPerShot;
     const isADS = this.mouseADS || this.gamepadADS;
@@ -953,16 +1019,7 @@ export class Player {
     const spreadRad = (weapon.spread * adsSpreadMult * Math.PI) / 180;
 
     for (let p = 0; p < pellets; p++) {
-      let shotDir = aimDir.clone();
-      if (spreadRad > 0) {
-        const right = new THREE.Vector3().crossVectors(aimDir, new THREE.Vector3(0, 1, 0)).normalize();
-        const up = new THREE.Vector3().crossVectors(right, aimDir).normalize();
-        const angle = Math.random() * Math.PI * 2;
-        const radius = Math.random() * spreadRad;
-        shotDir.add(right.multiplyScalar(Math.cos(angle) * radius));
-        shotDir.add(up.multiplyScalar(Math.sin(angle) * radius));
-        shotDir.normalize();
-      }
+      const shotDir = this.getShotDirection(weapon, aimDir, spreadRad, p, pellets);
 
       const pelletTarget = pellets > 1
         ? startPos.clone().add(shotDir.multiplyScalar(weapon.range))
@@ -1221,14 +1278,17 @@ export class Player {
     this.camera.position.copy(this.group.position);
     this.camera.position.y += 0.5;
 
-    const isADS = this.mouseADS || this.gamepadADS;
+    const isADS = this.isADSActive();
 
-    const targetFOV = isADS ? this.adsFOV : this.baseFOV;
+    const targetFOV = isADS
+      ? (this.activeWeapon.name === 'Kraber' ? 20 : this.adsFOV)
+      : this.baseFOV;
     this.currentFOV += (targetFOV - this.currentFOV) * 0.15;
     this.camera.fov = this.currentFOV;
     this.camera.updateProjectionMatrix();
 
     if (this.weaponMesh) {
+      this.weaponMesh.visible = !this.shouldShowSniperScope();
       const target = isADS ? this.adsPos.clone() : this.hipfirePos.clone();
       const speed = this.movement.hSpeed();
 
@@ -1258,7 +1318,8 @@ export class Player {
       target.z += this.weaponRecoilKick * 0.06;
       target.y += this.weaponRecoilKick * 0.01;
 
-      this.weaponMesh.position.lerp(target, 0.15);
+      this.weaponViewOffset.lerp(target, 0.15);
+      this.syncWeaponMeshToCamera();
     }
   }
 

@@ -15,6 +15,7 @@ export interface HUDUpdateData {
   checkpointProgress: number;
   enemyCount: number;
   destroyedTargets: number;
+  showSniperScope: boolean;
 }
 
 export class GameUI {
@@ -260,6 +261,60 @@ export class GameUI {
     hud.appendChild(dashLabel);
     this.hudElements['titanDashLabel'] = dashLabel;
 
+    const sniperScope = document.createElement('div');
+    sniperScope.id = 'sniper-scope';
+    sniperScope.style.cssText = `
+      position: absolute;
+      inset: 0;
+      display: none;
+      pointer-events: none;
+      z-index: 150;
+    `;
+    sniperScope.innerHTML = `
+      <div style="
+        position:absolute;
+        top:50%;
+        left:50%;
+        width:min(72vw, 72vh);
+        height:min(72vw, 72vh);
+        transform:translate(-50%, -50%);
+        border:2px solid rgba(180, 255, 255, 0.9);
+        border-radius:50%;
+        box-shadow:0 0 0 200vmax rgba(0, 0, 0, 0.88), 0 0 30px rgba(120, 255, 255, 0.25);
+      "></div>
+      <div style="
+        position:absolute;
+        top:50%;
+        left:50%;
+        width:1px;
+        height:min(72vw, 72vh);
+        transform:translate(-50%, -50%);
+        background:rgba(180, 255, 255, 0.75);
+      "></div>
+      <div style="
+        position:absolute;
+        top:50%;
+        left:50%;
+        width:min(72vw, 72vh);
+        height:1px;
+        transform:translate(-50%, -50%);
+        background:rgba(180, 255, 255, 0.75);
+      "></div>
+      <div style="
+        position:absolute;
+        top:50%;
+        left:50%;
+        width:10px;
+        height:10px;
+        transform:translate(-50%, -50%);
+        border:1px solid rgba(180, 255, 255, 0.95);
+        border-radius:50%;
+        box-shadow:0 0 8px rgba(180, 255, 255, 0.45);
+      "></div>
+    `;
+    hud.appendChild(sniperScope);
+    this.hudElements['sniperScope'] = sniperScope;
+
     // Embark indicator (shown when near titan)
     const embarkIndicator = document.createElement('div');
     embarkIndicator.id = 'embark-indicator';
@@ -402,7 +457,7 @@ export class GameUI {
     const { currentLevel, stats, scoreMultiplier, playerHealth,
             titanDashMeter, isPilotingTitan,
             capturePoints, capturedTime, checkpoints, checkpointProgress,
-            enemyCount, destroyedTargets } = data;
+            enemyCount, destroyedTargets, showSniperScope } = data;
 
     this.hudElements['level-info'].innerHTML = `
       <strong>LEVEL ${currentLevel.id}</strong><br>
@@ -474,6 +529,16 @@ export class GameUI {
         statsText += `TARGETS: ${destroyedTargets}/${currentLevel.targetCount}`;
     }
     this.hudElements['stats'].innerHTML = statsText;
+
+    const sniperScope = this.hudElements['sniperScope'];
+    if (sniperScope) {
+      sniperScope.style.display = showSniperScope ? 'block' : 'none';
+    }
+
+    const crosshair = document.getElementById('crosshair');
+    if (crosshair) {
+      crosshair.style.display = showSniperScope ? 'none' : 'block';
+    }
   }
 
   showMainMenu(levels: Level[], onStartGame: (id: number) => void): void {

@@ -9,6 +9,7 @@ import { Titan, TitanState } from './titan';
 import { GameState, GameStats } from './types';
 import { GameUI } from './ui';
 import { Weapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
+import { getBindings, keyCodeToLabel } from './keybindings';
 // import { soundManager } from './sound';
 
 interface WeaponPickup {
@@ -34,6 +35,11 @@ export class Game {
   titan: Titan | null = null;
   private weaponPickups: WeaponPickup[] = [];
   private pickupPromptEl: HTMLElement | null = null;
+  private activePickupHold: WeaponPickup | null = null;
+  private activePickupHoldTime = 0;
+  private readonly PICKUP_RANGE = 2;
+  private readonly PICKUP_PROMPT_RANGE = 4;
+  private readonly PICKUP_HOLD_TIME = 0.35;
 
   state: GameState = GameState.MAIN_MENU;
   currentLevel: Level | null = null;
@@ -374,7 +380,9 @@ export class Game {
 
     createLevel(this.scene, this.world, this.currentLevel);
 
+    console.log('[Game] Creating player...');
     this.player = new Player(this.camera, this.scene, this.world);
+    console.log('[Game] Player created, group children:', this.player.group.children.length);
     this.player.setTitanMeterCallback((meter) => {
       this.stats.titanMeter = meter;
     });
@@ -680,28 +688,53 @@ export class Game {
       const dist = this.player.group.position.distanceTo(pickup.position);
 
       // Track nearest for prompt
-      if (dist < 4 && dist < nearestDist) {
+      if (dist < this.PICKUP_PROMPT_RANGE && dist < nearestDist) {
         nearestDist = dist;
         nearestPickup = pickup;
       }
+    }
 
-      // Pickup: walk within 2m
-      if (dist < 2) {
+    const canHoldPickup = !!nearestPickup &&
+      nearestDist < this.PICKUP_RANGE &&
+      this.player.isInteractHeld() &&
+      !this.player.isInteractConsumed();
+
+    if (canHoldPickup && nearestPickup) {
+      const pickup = nearestPickup;
+
+      if (this.activePickupHold !== pickup) {
+        this.activePickupHold = pickup;
+        this.activePickupHoldTime = 0;
+      }
+
+      this.activePickupHoldTime = Math.min(this.PICKUP_HOLD_TIME, this.activePickupHoldTime + delta);
+
+      if (this.activePickupHoldTime >= this.PICKUP_HOLD_TIME) {
         const dropped = this.player.tryPickupWeapon(pickup.weapon);
         if (dropped) {
           pickup.weapon = dropped;
           this.rebuildPickupMesh(pickup);
-          pickup.cooldown = 0.5; // brief cooldown to prevent instant re-pickup
+          pickup.cooldown = 0.5;
           pickup.mesh.visible = false;
+          this.player.consumeInteractHold();
+          nearestPickup = null;
         }
+        this.activePickupHold = null;
+        this.activePickupHoldTime = 0;
       }
+    } else {
+      this.activePickupHold = null;
+      this.activePickupHoldTime = 0;
     }
 
-    // Pickup prompt
-    this.updatePickupPrompt(nearestPickup);
+    const holdProgress = this.activePickupHold === nearestPickup && nearestPickup
+      ? this.activePickupHoldTime / this.PICKUP_HOLD_TIME
+      : 0;
+
+    this.updatePickupPrompt(nearestPickup, holdProgress);
   }
 
-  private updatePickupPrompt(pickup: WeaponPickup | null) {
+  private updatePickupPrompt(pickup: WeaponPickup | null, holdProgress: number) {
     if (!pickup) {
       if (this.pickupPromptEl) {
         this.pickupPromptEl.style.display = 'none';
@@ -721,8 +754,15 @@ export class Game {
 
     this.pickupPromptEl.style.display = 'block';
     const color = '#' + pickup.weapon.bulletVisuals.color.toString(16).padStart(6, '0');
+    const interactKey = keyCodeToLabel(getBindings().embark);
+    const progressPct = Math.round(holdProgress * 100);
+    const progressBar = `
+      <div style="margin-top:6px;width:220px;height:6px;background:rgba(255,255,255,0.15);border-radius:999px;overflow:hidden;">
+        <div style="width:${progressPct}%;height:100%;background:${color};"></div>
+      </div>
+    `;
     this.pickupPromptEl.innerHTML =
-      `Pick up <span style="color:${color}">${pickup.weapon.name}</span>`;
+      `Hold [${interactKey}] / X to pick up <span style="color:${color}">${pickup.weapon.name}</span>${progressBar}`;
   }
 
   private updateObjectives(delta: number) {
@@ -920,7 +960,8 @@ export class Game {
       checkpoints: this.checkpoints,
       checkpointProgress: this.checkpointProgress,
       enemyCount: this.enemies.length,
-      destroyedTargets: this.targets.filter(t => t.health <= 0).length
+      destroyedTargets: this.targets.filter(t => t.health <= 0).length,
+      showSniperScope: this.player.shouldShowSniperScope(),
     });
   }
 

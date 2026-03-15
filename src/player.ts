@@ -6,6 +6,7 @@ import { BallisticsSystem, Bullet } from "./ballistics";
 import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG, DEFAULT_MUZZLE_CONFIG, EPG_EXPLOSION_CONFIG, FRAG_EXPLOSION_CONFIG } from "./effects";
 import { MovementSystem, MovementInput } from "./movement";
 import { AimingSystem } from "./aiming";
+import { ReticleRenderer } from "./reticle";
 import { soundManager } from "./sound";
 
 interface KeyState {
@@ -114,6 +115,7 @@ export class Player {
   private weaponManager = new WeaponManager();
   private activeWeapon!: Weapon;
   private aimingSystem = new AimingSystem();
+  private reticleRenderer = new ReticleRenderer();
   private recoilOffset = { x: 0, y: 0 };
   private crosshairSpread = 0;
   private weaponSwitchCooldown = 0;
@@ -172,8 +174,9 @@ export class Player {
       this.recoilOffset.x += movement.x;
       this.recoilOffset.y += movement.y;
     });
-    this.weaponManager.addWeapon(R201_WEAPON);
+this.weaponManager.addWeapon(R201_WEAPON);
     this.activeWeapon = this.weaponManager.getCurrentWeapon()!;
+    this.reticleRenderer.setWeapon(this.activeWeapon.name);
     this.rebuildWeaponMesh();
     this.updateWeaponHUD();
   }
@@ -243,6 +246,93 @@ export class Player {
       body.position.set(0, -0.01, 0.07); gun.add(body);
       const cell = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 10), accentMat);
       cell.position.set(0, -0.01, 0.18); gun.add(cell);
+    } else if (name === 'Alternator') {
+      const barrelL = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.25, 8), bodyMat);
+      barrelL.rotation.x = Math.PI / 2; barrelL.position.set(-0.018, 0.01, -0.08); gun.add(barrelL);
+      const barrelR = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.25, 8), bodyMat);
+      barrelR.rotation.x = Math.PI / 2; barrelR.position.set(0.018, 0.01, -0.08); gun.add(barrelR);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.12), bodyMat);
+      body.position.set(0, -0.01, 0.06); gun.add(body);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.06, 0.08), bodyMat);
+      stock.position.set(0, -0.01, 0.16); gun.add(stock);
+      const vent = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.02, 0.03), accentMat);
+      vent.position.set(0, 0.02, 0.04); gun.add(vent);
+    } else if (name === 'CAR') {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.016, 0.22, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.06); gun.add(barrel);
+      const suppressor = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.12, 8), bodyMat);
+      suppressor.rotation.x = Math.PI / 2; suppressor.position.set(0, 0.01, -0.16); gun.add(suppressor);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.055, 0.14), bodyMat);
+      body.position.set(0, -0.01, 0.05); gun.add(body);
+      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.07, 0.035), bodyMat);
+      mag.position.set(0, -0.05, 0.03); gun.add(mag);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.05, 0.1), bodyMat);
+      stock.position.set(0, -0.01, 0.15); gun.add(stock);
+      const sight = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.025, 0.04), accentMat);
+      sight.position.set(0, 0.035, 0.02); gun.add(sight);
+    } else if (name === 'Flatline') {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.32, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.12); gun.add(barrel);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.055, 0.2), bodyMat);
+      body.position.set(0, -0.005, 0.06); gun.add(body);
+      const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.04, 0.08), accentMat);
+      handguard.position.set(0, -0.01, -0.04); gun.add(handguard);
+      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.08, 0.04), bodyMat);
+      mag.position.set(0, -0.05, 0.06); gun.add(mag);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.055, 0.1), bodyMat);
+      stock.position.set(0, -0.01, 0.2); gun.add(stock);
+    } else if (name === 'Mastiff') {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.15, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.03); gun.add(barrel);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.06, 0.16), bodyMat);
+      body.position.set(0, -0.01, 0.08); gun.add(body);
+      const energyCell = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.08, 8), accentMat);
+      energyCell.position.set(0, 0.02, 0.14); gun.add(energyCell);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.06, 0.08), bodyMat);
+      stock.position.set(0, -0.01, 0.2); gun.add(stock);
+      const frame = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.008, 6, 16, Math.PI), accentMat);
+      frame.rotation.x = Math.PI / 2; frame.rotation.z = Math.PI; frame.position.set(0, 0.01, -0.02); gun.add(frame);
+    } else if (name === 'Wingman') {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.015, 0.28, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.12); gun.add(barrel);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.07, 0.12), bodyMat);
+      body.position.set(0, -0.02, 0.02); gun.add(body);
+      const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.035, 6), bodyMat);
+      cylinder.position.set(0, -0.02, -0.02); gun.add(cylinder);
+      const sight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.05), accentMat);
+      sight.position.set(0, 0.04, 0.0); gun.add(sight);
+      const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.03, 0.015), bodyMat);
+      trigger.position.set(0, -0.06, 0.06); gun.add(trigger);
+      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.06, 0.04), bodyMat);
+      grip.position.set(0, -0.06, 0.04); gun.add(grip);
+    } else if (name === 'L-STAR') {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.35, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, -0.12); gun.add(barrel);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.065, 0.22), bodyMat);
+      body.position.set(0, -0.01, 0.06); gun.add(body);
+      const coil1 = new THREE.Mesh(new THREE.TorusGeometry(0.02, 0.006, 6, 16), accentMat);
+      coil1.position.set(0, 0.02, -0.02); gun.add(coil1);
+      const coil2 = new THREE.Mesh(new THREE.TorusGeometry(0.02, 0.006, 6, 16), accentMat);
+      coil2.position.set(0, 0.02, -0.06); gun.add(coil2);
+      const energyPack = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.09, 0.04), accentMat);
+      energyPack.position.set(0, -0.04, 0.08); gun.add(energyPack);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.055, 0.08), bodyMat);
+      stock.position.set(0, -0.01, 0.2); gun.add(stock);
+    } else if (name === 'XO-16') {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.6, 8), bodyMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, -0.25); gun.add(barrel);
+      const barrelShroud = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.3, 8), bodyMat);
+      barrelShroud.rotation.x = Math.PI / 2; barrelShroud.position.set(0, 0.02, -0.45); gun.add(barrelShroud);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.25), bodyMat);
+      body.position.set(0, -0.01, 0.05); gun.add(body);
+      const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.12, 0.08), accentMat);
+      ammoBox.position.set(0, -0.06, 0.02); gun.add(ammoBox);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.15, 0.04), bodyMat);
+      handle.position.set(0, -0.08, 0.12); handle.rotation.x = -0.3; gun.add(handle);
+      const sightRail = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.015, 0.2), bodyMat);
+      sightRail.position.set(0, 0.045, -0.03); gun.add(sightRail);
+      const coolingVents = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.02, 0.06), accentMat);
+      coolingVents.position.set(0, 0.03, 0.08); gun.add(coolingVents);
     } else {
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.3), bodyMat);
       gun.add(body);
@@ -300,7 +390,7 @@ export class Player {
     this.syncWeaponMeshToCamera();
   }
 
-  private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
+private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     switch (this.activeWeapon.name) {
       case 'R-201':
         return new THREE.Vector3(0, 0.01, -0.35);
@@ -309,7 +399,21 @@ export class Player {
       case 'Kraber':
         return new THREE.Vector3(0, 0.01, -0.48);
       case 'EPG-1':
+        return new THREE.Vector3(0, 0.01, -0.18);
+      case 'Alternator':
         return new THREE.Vector3(0, 0.01, -0.2);
+      case 'CAR':
+        return new THREE.Vector3(0, 0.01, -0.22);
+      case 'Flatline':
+        return new THREE.Vector3(0, 0.01, -0.28);
+      case 'Mastiff':
+        return new THREE.Vector3(0, 0.01, -0.18);
+      case 'Wingman':
+        return new THREE.Vector3(0, 0.01, -0.26);
+      case 'L-STAR':
+        return new THREE.Vector3(0, 0.01, -0.35);
+      case 'XO-16':
+        return new THREE.Vector3(0, 0.02, -0.6);
       default:
         return new THREE.Vector3(0, 0, -0.18);
     }
@@ -406,6 +510,7 @@ export class Player {
     if (dropped) {
       this.activeWeapon = this.weaponManager.getCurrentWeapon()!;
       this.weaponSwitchCooldown = 0.3;
+      this.reticleRenderer.setWeapon(this.activeWeapon.name);
       this.rebuildWeaponMesh();
       this.updateWeaponHUD();
       soundManager.playSound('pickup', 0.4);
@@ -419,6 +524,7 @@ export class Player {
     this.activeWeapon = weapon;
     this.weaponSwitchCooldown = 0.3;
     this.crosshairSpread = 0;
+    this.reticleRenderer.setWeapon(weapon.name);
     this.rebuildWeaponMesh();
     this.updateWeaponHUD();
     soundManager.playSound('weapon_switch', 0.4);
@@ -519,6 +625,11 @@ export class Player {
     if (!piloting) { this.titanMouseLook.set(0, 0); }
     const hud = document.getElementById('weapon-hud');
     if (hud) hud.style.display = piloting ? 'none' : '';
+    if (piloting) {
+      this.reticleRenderer.setWeapon('XO-16');
+    } else {
+      this.reticleRenderer.setWeapon(this.activeWeapon.name);
+    }
   }
 
   private updateTitanControls(): void {
@@ -903,6 +1014,7 @@ export class Player {
           if (target.checkBulletHit && target.checkBulletHit(b.mesh.position)) {
             target.takeDamage(this.activeWeapon.damage, b.mesh.position);
             this.impactRenderer.spawnImpact(b.mesh.position.clone(), b.velocity.clone().normalize().negate(), PLAYER_IMPACT_CONFIG);
+            this.reticleRenderer.showHitmarker(target.health <= 0);
             hit = true;
             break;
           }
@@ -912,8 +1024,14 @@ export class Player {
       if (!hit && enemies) {
         for (const enemy of enemies) {
           if (enemy.checkBulletHit && enemy.checkBulletHit(b.mesh.position)) {
+            const wasDead = enemy.health <= 0;
             enemy.takeDamage(this.activeWeapon.damage, b.mesh.position);
             this.impactRenderer.spawnImpact(b.mesh.position.clone(), b.velocity.clone().normalize().negate(), PLAYER_IMPACT_CONFIG);
+            if (!wasDead && enemy.health <= 0) {
+              this.reticleRenderer.showHitmarker(true);
+            } else {
+              this.reticleRenderer.showHitmarker(false);
+            }
             hit = true;
             break;
           }
@@ -934,6 +1052,7 @@ export class Player {
                   if (dist < splashR) {
                     const falloff = 1 - dist / splashR;
                     target.takeDamage(Math.round(this.activeWeapon.damage * falloff), impactPos);
+                    this.reticleRenderer.showHitmarker(target.health <= 0);
                   }
                 }
               }
@@ -944,7 +1063,13 @@ export class Player {
                   const dist = impactPos.distanceTo(enemy.group.position);
                   if (dist < splashR) {
                     const falloff = 1 - dist / splashR;
+                    const wasDead = enemy.health <= 0;
                     enemy.takeDamage(Math.round(this.activeWeapon.damage * falloff), impactPos);
+                    if (!wasDead && enemy.health <= 0) {
+                      this.reticleRenderer.showHitmarker(true);
+                    } else {
+                      this.reticleRenderer.showHitmarker(false);
+                    }
                   }
                 }
               }
@@ -963,12 +1088,14 @@ export class Player {
     this.crosshairSpread = Math.max(0, this.crosshairSpread - 30 * delta);
     const isADS = this.mouseADS || this.gamepadADS;
     const moveSpread = this.movement.hSpeed() * (isADS ? 0.1 : 0.3);
+    const totalSpread = this.crosshairSpread + moveSpread;
 
-    const ch = document.getElementById('crosshair');
-    if (ch) {
-      const totalSpread = this.crosshairSpread + moveSpread;
-      const gap = Math.round(totalSpread);
-      ch.style.setProperty('--spread', `${gap}px`);
+    if (this.shouldShowSniperScope()) {
+      this.reticleRenderer.hide();
+    } else {
+      this.reticleRenderer.setSpread(totalSpread);
+      this.reticleRenderer.render();
+      this.reticleRenderer.show();
     }
 
     if (this.gamepadLook.length() > 0.1) {

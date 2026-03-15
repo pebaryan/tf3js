@@ -1256,12 +1256,26 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     
     // Start from hand position
     const handOffset = new THREE.Vector3(0.2, -0.15, -0.3).applyQuaternion(this.camera.quaternion);
-    this.grappleProjectile.position.copy(this.camera.position).add(handOffset);
+    const startPos = this.camera.position.clone().add(handOffset);
+    this.grappleProjectile.position.copy(startPos);
     
     // Set velocity toward target
-    const targetDir = hits[0].point.clone().sub(this.grappleProjectile.position).normalize();
+    const targetDir = hits[0].point.clone().sub(startPos).normalize();
     this.grappleProjectileVelocity = targetDir.multiplyScalar(this.GRAPPLE_PROJECTILE_SPEED);
     this.grappleProjectileActive = true;
+    
+    // Create trailing rope line
+    const ropeGeo = new THREE.BufferGeometry();
+    const positions = new Float32Array(6);
+    ropeGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const ropeMat = new THREE.LineBasicMaterial({
+      color: 0x00ffcc,
+      transparent: true,
+      opacity: 0.7,
+      linewidth: 2
+    });
+    this.grappleRope = new THREE.Line(ropeGeo, ropeMat);
+    this.scene.add(this.grappleRope);
     
     this.scene.add(this.grappleProjectile);
     this.grappleCooldown = this.GRAPPLE_COOLDOWN;
@@ -1274,9 +1288,19 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     // Apply gravity to projectile
     this.grappleProjectileVelocity.y += this.GRAPPLE_GRAVITY * delta;
     
-    // Update position
+    // Store old position and update position
     const oldPos = this.grappleProjectile.position.clone();
     this.grappleProjectile.position.add(this.grappleProjectileVelocity.clone().multiplyScalar(delta));
+
+    // Update rope to follow projectile (after position update)
+    if (this.grappleRope) {
+      const handOffset = new THREE.Vector3(0.2, -0.15, -0.3).applyQuaternion(this.camera.quaternion);
+      const ropeStart = this.camera.position.clone().add(handOffset);
+      const positions = this.grappleRope.geometry.attributes.position as THREE.BufferAttribute;
+      positions.setXYZ(0, ropeStart.x, ropeStart.y, ropeStart.z);
+      positions.setXYZ(1, this.grappleProjectile.position.x, this.grappleProjectile.position.y, this.grappleProjectile.position.z);
+      positions.needsUpdate = true;
+    }
     
     // Check for collision
     const direction = this.grappleProjectileVelocity.clone().normalize();
@@ -1289,10 +1313,14 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
       if (hits.length > 0) {
         // Hook connected!
         this.grappleTarget.copy(hits[0].point);
-        this.scene.remove(this.grappleProjectile!);
-        this.grappleProjectile.geometry.dispose();
-        (this.grappleProjectile.material as THREE.Material).dispose();
-        this.grappleProjectile = null;
+        
+        // Clean up projectile and rope
+        if (this.grappleProjectile) {
+          this.scene.remove(this.grappleProjectile);
+          this.grappleProjectile.geometry.dispose();
+          (this.grappleProjectile.material as THREE.Material).dispose();
+          this.grappleProjectile = null;
+        }
         this.grappleProjectileActive = false;
         
         // Start grappling
@@ -1308,6 +1336,13 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
       (this.grappleProjectile.material as THREE.Material).dispose();
       this.grappleProjectile = null;
       this.grappleProjectileActive = false;
+      
+      if (this.grappleRope) {
+        this.scene.remove(this.grappleRope);
+        this.grappleRope.geometry.dispose();
+        (this.grappleRope.material as THREE.Material).dispose();
+        this.grappleRope = null;
+      }
     }
   }
 
@@ -1322,15 +1357,24 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
       this.grapplePreviewLine = null;
     }
 
-    // Create rope
-    const geo = new THREE.BufferGeometry();
-    const positions = new Float32Array(6);
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0x00ffcc, transparent: true, opacity: 0.85, linewidth: 2,
-    });
-    this.grappleRope = new THREE.Line(geo, mat);
-    this.scene.add(this.grappleRope);
+    // The rope from the projectile should already exist, just update it
+    if (this.grappleRope) {
+      (this.grappleRope.material as THREE.LineBasicMaterial).opacity = 0.85;
+      // Update rope end position to actual target point
+      const positions = this.grappleRope.geometry.attributes.position as THREE.BufferAttribute;
+      positions.setXYZ(1, this.grappleTarget.x, this.grappleTarget.y, this.grappleTarget.z);
+      positions.needsUpdate = true;
+    } else {
+      // Fallback: create new rope if somehow didn't exist
+      const geo = new THREE.BufferGeometry();
+      const positions = new Float32Array(6);
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({
+        color: 0x00ffcc, transparent: true, opacity: 0.85, linewidth: 2,
+      });
+      this.grappleRope = new THREE.Line(geo, mat);
+      this.scene.add(this.grappleRope);
+    }
 
     // Cancel other movement states
     this.movement.isWallRunning = false;
@@ -1406,6 +1450,16 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     const toTarget = this.grappleTarget.clone().sub(playerPos);
     const dist = toTarget.length();
 
+    // Update rope visual
+    if (this.grappleRope) {
+      const ropeStart = playerPos.clone();
+      ropeStart.y += 0.3;
+      const positions = this.grappleRope.geometry.attributes.position as THREE.BufferAttribute;
+      positions.setXYZ(0, ropeStart.x, ropeStart.y, ropeStart.z);
+      positions.setXYZ(1, this.grappleTarget.x, this.grappleTarget.y, this.grappleTarget.z);
+      positions.needsUpdate = true;
+    }
+
     // Release if reached target
     if (dist < 2.0) {
       this.stopGrapple();
@@ -1449,16 +1503,6 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     const speed = m.vel.length();
     if (speed > 40) {
       m.vel.multiplyScalar(40 / speed);
-    }
-
-    // Update rope visual
-    if (this.grappleRope) {
-      const ropeStart = playerPos.clone();
-      ropeStart.y += 0.3;
-      const positions = this.grappleRope.geometry.attributes.position as THREE.BufferAttribute;
-      positions.setXYZ(0, ropeStart.x, ropeStart.y, ropeStart.z);
-      positions.setXYZ(1, this.grappleTarget.x, this.grappleTarget.y, this.grappleTarget.z);
-      positions.needsUpdate = true;
     }
   }
 

@@ -403,9 +403,6 @@ export class Game {
         this.titan.setPilotInput(forward, right, lookX, lookY, fire, dash);
       }
     });
-    this.player.setHookIndicatorCallback((progress, show = true) => {
-      this.ui.showGrappleHookIndicator(show, progress);
-    });
     this.scene.add(this.player.group);
 
     this.spawnWeaponPickups();

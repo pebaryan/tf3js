@@ -338,29 +338,6 @@ export class GameUI {
     hud.appendChild(embarkIndicator);
     this.hudElements['embarkIndicator'] = embarkIndicator;
 
-    // Grapple hook progress indicator
-    const grappleHookIndicator = document.createElement('div');
-    grappleHookIndicator.id = 'grapple-hook-indicator';
-    grappleHookIndicator.style.cssText = `
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      display: none;
-      z-index: 199;
-    `;
-    grappleHookIndicator.innerHTML = `
-      <div style="width: 60px; height: 60px; border: 3px solid rgba(0, 255, 204, 0.7); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
-        <div id="grapple-hook-progress" style="width: 0px; height: 0px; background: #00ffcc; border-radius: 50%; transition: all 0.1s;"></div>
-      </div>
-    `;
-    hud.appendChild(grappleHookIndicator);
-    this.hudElements['grappleHookIndicator'] = grappleHookIndicator;
-    const progressEl = grappleHookIndicator.querySelector('#grapple-hook-progress') as HTMLElement | null;
-    if (progressEl) {
-      this.hudElements['grappleHookProgress'] = progressEl;
-    }
-
     // Pause overlay
     const pauseOverlay = document.createElement('div');
     pauseOverlay.id = 'pause-overlay';
@@ -1006,20 +983,6 @@ showPilotingIndicator(show: boolean): void {
     }
     if (indicator) {
       indicator.style.display = show ? 'block' : 'none';
-    }
-  }
-
-  showGrappleHookIndicator(show: boolean, progress: number = 0): void {
-    const indicator = document.getElementById('grapple-hook-indicator');
-    const progressEl = document.getElementById('grapple-hook-progress');
-    if (indicator && progressEl) {
-      indicator.style.display = show ? 'block' : 'none';
-      if (show) {
-        const size = 20 + (progress * 40);
-        progressEl.style.width = size + 'px';
-        progressEl.style.height = size + 'px';
-        progressEl.style.opacity = (0.5 + progress * 0.5).toString();
-      }
     }
   }
 }

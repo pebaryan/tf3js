@@ -33,11 +33,20 @@ export class BallisticsSystem {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(startPos);
 
-    // Orient bullet along velocity
+    // Orient bullet along velocity using quaternion
     if (velocity.length() > 0.1) {
-      const lookTarget = startPos.clone().add(velocity);
-      mesh.lookAt(lookTarget);
+      const up = new THREE.Vector3(0, 1, 0);
+      const right = new THREE.Vector3();
+      const forward = velocity.clone().normalize();
+      
+      right.crossVectors(up, forward).normalize();
+      
+      const matrix = new THREE.Matrix4();
+      matrix.makeBasis(right, up, forward);
+      mesh.quaternion.setFromRotationMatrix(matrix);
+      
       if (visuals.meshType === 'capsule') {
+        // Capsules need to align with X axis after rotation
         mesh.rotateX(Math.PI / 2);
       }
     }

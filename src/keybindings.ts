@@ -24,7 +24,7 @@ export const DEFAULT_BINDINGS: Bindings = {
   pause:     'Escape',
   callTitan: 'KeyT',
   embark:    'KeyE',
-  restart:   'KeyR',
+  restart:   'KeyY',
   mainMenu:  'KeyM',
 };
 

@@ -12,6 +12,7 @@ export class Target {
   scene: THREE.Scene;
   world: CANNON.World;
   mesh: THREE.Mesh;
+  group: THREE.Mesh; // alias for mesh (for compatibility with damage code)
   body: CANNON.Body;
   
   private maxHealth = 100;
@@ -41,6 +42,8 @@ export class Target {
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
     scene.add(this.mesh);
+    
+    this.group = this.mesh; // alias for compatibility
     
     // Physics body
     const shape = new CANNON.Cylinder(0.8, 0.8, 2, 16);

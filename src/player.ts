@@ -26,6 +26,8 @@ interface Grenade {
   velocity: THREE.Vector3;
   fuseTime: number;
   bouncesLeft: number;
+  trail: THREE.Line;
+  trailPositions: THREE.Vector3[];
 }
 
 /**
@@ -110,6 +112,12 @@ export class Player {
   private grenades: Grenade[] = [];
   private grenadeCooldown = 0;
   private grenadeCount = 2;
+  private maxGrenades = 2;
+  private grenadeRegenTime = 0;
+  private readonly GRENADE_REGEN_DURATION = 5; // seconds to regenerate one grenade
+  private grenadeHeld = false;
+  private grenadeTrajectoryLine: THREE.Line | null = null;
+  private gamepadGrenadeHeld = false;
   private ballisticsSystem!: BallisticsSystem;
   private impactRenderer!: ImpactEffectsRenderer;
   private weaponManager = new WeaponManager();
@@ -547,7 +555,7 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     }
     // Reload
     else if (e.code === 'KeyR') { if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); } this.updateWeaponHUD(); }
-    else if (e.code === 'KeyG') { this.throwGrenade(); }
+    else if (e.code === 'KeyG') { this.grenadeHeld = true; }
     else if (e.code === 'KeyQ') { this.grappleKeyHeld = true; this.startGrapple(); }
     // Weapon switching: 1-4 keys
     else if (e.code === 'Digit1') { this.switchWeapon(this.weaponManager.switchTo(0)); }
@@ -576,6 +584,12 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
       this.suppressInteractRelease = false;
     }
     else if (e.code === 'KeyQ') { this.grappleKeyHeld = false; this.stopGrapple(); }
+    else if (e.code === 'KeyG') {
+      if (this.grenadeHeld) {
+        this.grenadeHeld = false;
+        this.throwGrenade();
+      }
+    }
   }
 
   // --- look sensitivity ---
@@ -741,8 +755,12 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     }
     this.gamepadReloadPrev = buttonY;
 
-    // B = grenade
+    // B = grenade (hold to aim, release to throw)
     if (buttonB && !this.gamepadGrenadePrev) {
+      this.gamepadGrenadeHeld = true;
+    }
+    if (!buttonB && this.gamepadGrenadeHeld) {
+      this.gamepadGrenadeHeld = false;
       this.throwGrenade();
     }
     this.gamepadGrenadePrev = buttonB;
@@ -774,19 +792,15 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
           }
         }
       }
-    } else {
+} else {
       if (
         this.gamepadButtonXHoldTime > 0 &&
         this.gamepadButtonXHoldTime < this.DISENGAGE_HOLD_TIME &&
         !this.suppressInteractRelease
       ) {
-        if (this.onEmbarkTitan) {
-          this.lastEmbarkTime = performance.now();
-          this.onEmbarkTitan();
-        } else {
-          if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); }
-          this.updateWeaponHUD();
-        }
+        // Short press: reload (embark is handled separately via keyboard E)
+        if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); }
+        this.updateWeaponHUD();
       }
       this.gamepadButtonXHoldTime = 0;
       this.isDisembarking = false;
@@ -907,6 +921,7 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     this.applyVelocity();
     this.handleShooting(delta, targets, enemies);
     this.updateGrenades(delta, targets, enemies);
+    this.updateGrenadeTrajectory();
     this.updateAiming(delta);
     this.syncCamera();
     this.updateUI();
@@ -1089,6 +1104,12 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     const isADS = this.mouseADS || this.gamepadADS;
     const moveSpread = this.movement.hSpeed() * (isADS ? 0.1 : 0.3);
     const totalSpread = this.crosshairSpread + moveSpread;
+
+    // Hide reticle when pointer is not locked (menu/pause)
+    if (!document.pointerLockElement) {
+      this.reticleRenderer.hide();
+      return;
+    }
 
     if (this.shouldShowSniperScope()) {
       this.reticleRenderer.hide();
@@ -1293,29 +1314,62 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
 
     this.grenadeCount--;
     this.grenadeCooldown = 0.8;
+    this.grenadeRegenTime = 0;
 
     const throwDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
     throwDir.y += 0.3;
     throwDir.normalize();
 
-    const startPos = this.camera.position.clone().add(throwDir.clone().multiplyScalar(0.5));
+    // Start from hand position (lower right of screen where weapon appears)
+    const handOffset = new THREE.Vector3(0.2, -0.15, -0.3).applyQuaternion(this.camera.quaternion);
+    const startPos = this.camera.position.clone().add(handOffset);
     const velocity = throwDir.multiplyScalar(20);
 
     const geo = new THREE.SphereGeometry(0.05, 8, 8);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x445544, emissive: 0x222211, emissiveIntensity: 0.5,
+      color: 0x44ff44,
+      emissive: 0x44ff44,
+      emissiveIntensity: 2,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(startPos);
     this.scene.add(mesh);
 
-    this.grenades.push({ mesh, velocity, fuseTime: 2.0, bouncesLeft: 3 });
+    const trailGeo = new THREE.BufferGeometry();
+    const trailPositions = new Float32Array(60 * 3);
+    trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+    trailGeo.setDrawRange(0, 0);
+    const trailMat = new THREE.LineBasicMaterial({
+      color: 0x44ff44,
+      transparent: true,
+      opacity: 0.6,
+    });
+    const trail = new THREE.Line(trailGeo, trailMat);
+    this.scene.add(trail);
+
+    this.grenades.push({ 
+      mesh, 
+      velocity, 
+      fuseTime: 2.0, 
+      bouncesLeft: 3,
+      trail,
+      trailPositions: [startPos.clone()],
+    });
     this.updateWeaponHUD();
   }
 
   private updateGrenades(delta: number, targets?: any[], enemies?: any[]): void {
     if (this.grenadeCooldown > 0) {
       this.grenadeCooldown = Math.max(0, this.grenadeCooldown - delta);
+    }
+
+    if (this.grenadeCount < this.maxGrenades) {
+      this.grenadeRegenTime += delta;
+      if (this.grenadeRegenTime >= this.GRENADE_REGEN_DURATION) {
+        this.grenadeCount++;
+        this.grenadeRegenTime = 0;
+        this.updateWeaponHUD();
+      }
     }
 
     const worldMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
@@ -1327,6 +1381,19 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
 
       const prevPos = g.mesh.position.clone();
       g.mesh.position.add(g.velocity.clone().multiplyScalar(delta));
+
+      g.trailPositions.push(g.mesh.position.clone());
+      if (g.trailPositions.length > 20) {
+        g.trailPositions.shift();
+      }
+      const trailArray = (g.trail.geometry.attributes.position as THREE.BufferAttribute).array;
+      for (let j = 0; j < g.trailPositions.length; j++) {
+        trailArray[j * 3] = g.trailPositions[j].x;
+        trailArray[j * 3 + 1] = g.trailPositions[j].y;
+        trailArray[j * 3 + 2] = g.trailPositions[j].z;
+      }
+      g.trail.geometry.attributes.position.needsUpdate = true;
+      g.trail.geometry.setDrawRange(0, g.trailPositions.length);
 
       const step = g.mesh.position.clone().sub(prevPos);
       const stepLen = step.length();
@@ -1367,6 +1434,7 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
                 if (dist < splashR) {
                   const falloff = 1 - dist / splashR;
                   target.takeDamage(Math.round(damage * falloff), pos);
+                  this.reticleRenderer.showHitmarker(target.health <= 0);
                 }
               }
             }
@@ -1376,8 +1444,14 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
               if (enemy.group) {
                 const dist = pos.distanceTo(enemy.group.position);
                 if (dist < splashR) {
+                  const wasDead = enemy.health <= 0;
                   const falloff = 1 - dist / splashR;
                   enemy.takeDamage(Math.round(damage * falloff), pos);
+                  if (!wasDead && enemy.health <= 0) {
+                    this.reticleRenderer.showHitmarker(true);
+                  } else {
+                    this.reticleRenderer.showHitmarker(false);
+                  }
                 }
               }
             }
@@ -1387,9 +1461,123 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
         this.scene.remove(g.mesh);
         g.mesh.geometry.dispose();
         (g.mesh.material as THREE.Material).dispose();
+        this.scene.remove(g.trail);
+        g.trail.geometry.dispose();
+        (g.trail.material as THREE.Material).dispose();
         this.grenades.splice(i, 1);
       }
     }
+  }
+
+  private updateGrenadeTrajectory(): void {
+    // Hide trajectory when pointer is not locked (menu/pause)
+    if (!document.pointerLockElement) {
+      if (this.grenadeTrajectoryLine) {
+        this.scene.remove(this.grenadeTrajectoryLine);
+        this.grenadeTrajectoryLine.geometry.dispose();
+        (this.grenadeTrajectoryLine.material as THREE.Material).dispose();
+        this.grenadeTrajectoryLine = null;
+      }
+      return;
+    }
+
+    const isHolding = this.grenadeHeld || this.gamepadGrenadeHeld;
+    
+    if (!isHolding || this.grenadeCooldown > 0 || this.grenadeCount <= 0) {
+      if (this.grenadeTrajectoryLine) {
+        this.scene.remove(this.grenadeTrajectoryLine);
+        this.grenadeTrajectoryLine.geometry.dispose();
+        (this.grenadeTrajectoryLine.material as THREE.Material).dispose();
+        this.grenadeTrajectoryLine = null;
+      }
+      return;
+    }
+
+    const throwDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    throwDir.y += 0.3;
+    throwDir.normalize();
+    
+    // Start position matches throwGrenade - use weapon-like offset from camera
+    const handOffset = new THREE.Vector3(0.2, -0.15, -0.3).applyQuaternion(this.camera.quaternion);
+    const startPos = this.camera.position.clone().add(handOffset);
+    const velocity = throwDir.clone().multiplyScalar(20);
+    const gravity = -20;
+    
+    // Get collision meshes but we'll skip early segments to avoid hitting weapon
+    const worldMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
+    
+    const points: THREE.Vector3[] = [];
+    const pos = startPos.clone();
+    const vel = velocity.clone();
+    const dt = 0.03;
+    const maxBounces = 3;
+    let bounces = 0;
+    
+    // Skip collision for first few steps to avoid hitting weapon/viewmodel
+    const skipCollisionSteps = 3;
+    
+    for (let i = 0; i < 150 && bounces <= maxBounces; i++) {
+      points.push(pos.clone());
+      
+      const prevPos = pos.clone();
+      vel.y += gravity * dt;
+      pos.add(vel.clone().multiplyScalar(dt));
+      
+      // Skip collision detection near player to avoid hitting weapon model
+      if (i < skipCollisionSteps) continue;
+      
+      const stepLen = pos.distanceTo(prevPos);
+      if (stepLen > 0.001) {
+        const raycaster = new THREE.Raycaster(prevPos, pos.clone().sub(prevPos).normalize(), 0, stepLen + 0.05);
+        const hits = raycaster.intersectObjects(worldMeshes, false);
+        
+        if (hits.length > 0 && hits[0].distance <= stepLen + 0.05) {
+          const hit = hits[0];
+          points.push(hit.point.clone());
+          
+          if (bounces < maxBounces) {
+            const normal = hit.face
+              ? hit.face.normal.clone().transformDirection((hit.object as THREE.Mesh).matrixWorld)
+              : pos.clone().sub(prevPos).normalize().negate();
+            vel.reflect(normal).multiplyScalar(0.5);
+            pos.copy(hit.point).add(normal.multiplyScalar(0.02));
+            bounces++;
+          } else {
+            break;
+          }
+        }
+      }
+      
+      if (pos.y < -10) break;
+    }
+
+    // Ensure we have at least the start point
+    if (points.length < 1) {
+      points.push(startPos.clone());
+    }
+
+    if (points.length < 2) {
+      // Add a point ahead if we don't have enough
+      const forward = new THREE.Vector3(0, 0, -2).applyQuaternion(this.camera.quaternion);
+      points.push(startPos.clone().add(forward));
+    }
+
+    if (this.grenadeTrajectoryLine) {
+      this.scene.remove(this.grenadeTrajectoryLine);
+      this.grenadeTrajectoryLine.geometry.dispose();
+      (this.grenadeTrajectoryLine.material as THREE.Material).dispose();
+    }
+
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({ 
+      color: 0x44ff44, 
+      transparent: true, 
+      opacity: 0.8,
+      linewidth: 2
+    });
+
+    this.grenadeTrajectoryLine = new THREE.Line(geometry, material);
+    this.scene.add(this.grenadeTrajectoryLine);
   }
 
   /* ------------------------------------------------------------------ */

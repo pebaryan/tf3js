@@ -160,13 +160,13 @@ export class Enemy {
 
     // Torso
     const torso = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.8, 0.25), bodyMat);
-    torso.position.y = 1.1;
+    torso.position.y = 1.05;
     torso.castShadow = true;
     this.mesh.add(torso);
 
     // Head
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 0.25), bodyMat);
-    head.position.y = 1.7;
+    head.position.y = 1.65;
     head.castShadow = true;
     this.mesh.add(head);
     this.headMesh = head;
@@ -176,19 +176,19 @@ export class Enemy {
       new THREE.BoxGeometry(0.2, 0.06, 0.02),
       new THREE.MeshBasicMaterial({ color: 0x220000 }),
     );
-    visor.position.set(0, 1.72, 0.13);
+    visor.position.set(0, 1.67, 0.13);
     this.mesh.add(visor);
 
     // Left leg
     const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, 0.15), darkMat);
-    leftLeg.position.set(-0.1, 0.35, 0);
+    leftLeg.position.set(-0.1, 0.3, 0);
     leftLeg.castShadow = true;
     this.mesh.add(leftLeg);
     this.leftLegMesh = leftLeg;
 
     // Right leg
     const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, 0.15), darkMat);
-    rightLeg.position.set(0.1, 0.35, 0);
+    rightLeg.position.set(0.1, 0.3, 0);
     rightLeg.castShadow = true;
     this.mesh.add(rightLeg);
     this.rightLegMesh = rightLeg;
@@ -198,7 +198,7 @@ export class Enemy {
       new THREE.BoxGeometry(0.06, 0.06, 0.3),
       new THREE.MeshStandardMaterial({ color: 0x444444 }),
     );
-    weapon.position.set(0.25, 1.0, 0.2);
+    weapon.position.set(0.25, 0.95, 0.2);
     weapon.castShadow = true;
     this.mesh.add(weapon);
 

@@ -525,6 +525,14 @@ export class Game {
     this.player.update(delta, this.targets, this.enemies);
     this.targets.forEach(target => target.update(delta, this.camera.position));
 
+    // Update radar with enemy positions
+    const enemyData = this.enemies.map(e => ({
+      position: e.group.position.clone(),
+      velocity: e.body?.velocity ? new THREE.Vector3(e.body.velocity.x, e.body.velocity.y, e.body.velocity.z) : undefined
+    }));
+    this.player.updateRadar(enemyData);
+    this.player.renderRadar();
+
     this.updateObjectives(delta);
     this.updateEnemies(delta);
 
@@ -803,10 +811,10 @@ export class Game {
 
   private spawnEnemy() {
     const spawnPoints = [
-      new THREE.Vector3(30, 1.8, -30),
-      new THREE.Vector3(-30, 1.8, -30),
-      new THREE.Vector3(30, 1.8, 30),
-      new THREE.Vector3(-30, 1.8, 30)
+      new THREE.Vector3(30, 0, -30),
+      new THREE.Vector3(-30, 0, -30),
+      new THREE.Vector3(30, 0, 30),
+      new THREE.Vector3(-30, 0, 30)
     ];
 
     const point = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
@@ -855,7 +863,7 @@ export class Game {
         const dz = bPos.z - playerPos.z;
         const distSq = dx * dx + dy * dy + dz * dz;
         if (distSq < 0.5 * 0.5) {
-          this.player.takeDamage(8);
+          this.player.takeDamage(8, bPos.clone());
           // Dispose this bullet
           this.scene.remove(b.mesh);
           b.mesh.geometry.dispose();

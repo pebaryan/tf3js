@@ -7,6 +7,7 @@ import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG, DEFAULT_MUZZLE_CONFIG, EPG
 import { MovementSystem, MovementInput } from "./movement";
 import { AimingSystem } from "./aiming";
 import { ReticleRenderer } from "./reticle";
+import { RadarRenderer } from "./radar";
 import { soundManager } from "./sound";
 
 interface KeyState {
@@ -124,6 +125,7 @@ export class Player {
   private activeWeapon!: Weapon;
   private aimingSystem = new AimingSystem();
   private reticleRenderer = new ReticleRenderer();
+  private radarRenderer = new RadarRenderer();
   private recoilOffset = { x: 0, y: 0 };
   private crosshairSpread = 0;
   private weaponSwitchCooldown = 0;
@@ -798,9 +800,14 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
         this.gamepadButtonXHoldTime < this.DISENGAGE_HOLD_TIME &&
         !this.suppressInteractRelease
       ) {
-        // Short press: reload (embark is handled separately via keyboard E)
-        if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); }
-        this.updateWeaponHUD();
+        // Short press: try embark first, otherwise reload
+        if (this.onEmbarkTitan) {
+          this.lastEmbarkTime = performance.now();
+          this.onEmbarkTitan();
+        } else {
+          if (this.weaponManager.startReload()) { soundManager.playSound('reload', 0.4); }
+          this.updateWeaponHUD();
+        }
       }
       this.gamepadButtonXHoldTime = 0;
       this.isDisembarking = false;
@@ -1132,9 +1139,15 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     }
   }
 
-  takeDamage(amount: number) {
+  takeDamage(amount: number, sourcePosition?: THREE.Vector3) {
     this.health = Math.max(0, this.health - amount);
     soundManager.playSound('hit', 0.5);
+    
+    if (sourcePosition) {
+      const playerRotation = this.euler.y;
+      this.radarRenderer.showDamageDirection(sourcePosition, this.group.position, playerRotation);
+    }
+    
     if (this.health <= 0) {
       setTimeout(() => {
         this.body.position.set(0, 5, 0);
@@ -1143,6 +1156,14 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
         this.health = 100;
       }, 2000);
     }
+  }
+
+  updateRadar(enemies: { position: THREE.Vector3; velocity?: THREE.Vector3 }[]): void {
+    this.radarRenderer.updateEnemies(enemies, this.group.position, this.euler.y);
+  }
+
+  renderRadar(): void {
+    this.radarRenderer.render();
   }
 
   private shoot() {

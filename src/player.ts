@@ -72,17 +72,24 @@ export class Player {
   private isGrappling = false;
   private grappleTarget = new THREE.Vector3();
   private grappleRope: THREE.Line | null = null;
+  private grapplePreviewLine: THREE.Line | null = null;
   private grappleCooldown = 0;
   private grappleKeyHeld = false;
-  private readonly GRAPPLE_RANGE = 40;
-  private readonly GRAPPLE_PULL_SPEED = 25;
-  private readonly GRAPPLE_COOLDOWN = 8;
-  private readonly GRAPPLE_GRAVITY = -5;
+  private grappleAimTarget = new THREE.Vector3();
+  private grappleHooking = false;
+  private grappleHookStartTime = 0;
+  private grappleHookDuration = 0.15; // 150ms delay to allow aiming
+  private readonly GRAPPLE_RANGE = 50;
+  private readonly GRAPPLE_PULL_SPEED = 30;
+  private readonly GRAPPLE_COOLDOWN = 2; // Reduced cooldown
+  private readonly GRAPPLE_GRAVITY = -8;
+  private readonly GRAPPLE_TANGENT_BOOST = 1.2;  // swing boost multiplier
 
   // --- gamepad ---
   private gamepadIndex: number | null = null;
   private gamepadMove = new THREE.Vector2();
   private gamepadLook = new THREE.Vector2();
+  private gamepadLookSmoothed = new THREE.Vector2();
   private titanMouseLook = new THREE.Vector2();
   private gamepadJumpPrev = false;
   private gamepadCrouchPrev = false;
@@ -140,6 +147,7 @@ export class Player {
   private onDisembarkTitan?: () => void;
   private onPause?: () => void;
   private onTitanControl?: (forward: number, right: number, lookX: number, lookY: number, fire: boolean, dash: boolean) => void;
+  private onHookIndicatorUpdate?: (progress: number, show?: boolean) => void;
   private isPilotingTitan = false;
   private gamepadButtonXHoldTime = 0;
   private gamepadMenuPrev = false;
@@ -635,6 +643,7 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
   setTitanControlCallback(callback: (forward: number, right: number, lookX: number, lookY: number, fire: boolean, dash: boolean) => void): void {
     this.onTitanControl = callback;
   }
+  setHookIndicatorCallback(callback: (progress: number, show?: boolean) => void): void { this.onHookIndicatorUpdate = callback; }
 
   setPilotingState(piloting: boolean): void {
     this.isPilotingTitan = piloting;
@@ -738,6 +747,11 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
       applyAimCurve(rawLookX, curve) * lookSens,
       applyAimCurve(rawLookY, curve) * lookSens,
     );
+    
+    // Smooth the gamepad look input to reduce jumpiness
+    const smoothFactor = 0.3;
+    this.gamepadLookSmoothed.x += (this.gamepadLook.x - this.gamepadLookSmoothed.x) * smoothFactor;
+    this.gamepadLookSmoothed.y += (this.gamepadLook.y - this.gamepadLookSmoothed.y) * smoothFactor;
 
     // Ninja layout: LB=jump, RB=crouch, LT=ADS, RT=fire
     const lb = gp.buttons[4]?.pressed ?? false;
@@ -848,10 +862,10 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     this.gamepadFire = rt > 0.5;
     this.gamepadADS = lt > 0.3;
 
-    if (this.gamepadLook.length() > dz) {
+    if (this.gamepadLookSmoothed.length() > dz) {
       const adsMult = (this.mouseADS || this.gamepadADS) ? this.ADS_SENS_MULT : 1.0;
-      this.euler.y -= this.gamepadLook.x * 0.04 * adsMult;
-      this.euler.x -= this.gamepadLook.y * 0.025 * adsMult;
+      this.euler.y -= this.gamepadLookSmoothed.x * 0.04 * adsMult;
+      this.euler.x -= this.gamepadLookSmoothed.y * 0.03 * adsMult;
       this.euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.euler.x));
     }
   }
@@ -929,6 +943,7 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     this.handleShooting(delta, targets, enemies);
     this.updateGrenades(delta, targets, enemies);
     this.updateGrenadeTrajectory();
+    this.updateGrappleTrajectory();
     this.updateAiming(delta);
     this.syncCamera();
     this.updateUI();
@@ -1225,7 +1240,7 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
   /* ------------------------------------------------------------------ */
 
   private startGrapple(): void {
-    if (this.isGrappling || this.grappleCooldown > 0) return;
+    if (this.isGrappling || this.grappleCooldown > 0 || this.grappleHooking) return;
 
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
@@ -1234,31 +1249,69 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     const hits = raycaster.intersectObjects(this.getMeshes());
     if (hits.length === 0) return;
 
-    this.isGrappling = true;
+    // Start hooking delay - player can still aim during this time
+    this.grappleHooking = true;
+    this.grappleHookStartTime = performance.now();
     this.grappleTarget.copy(hits[0].point);
+    this.grappleAimTarget.copy(hits[0].point);
+    this.grappleCooldown = this.GRAPPLE_COOLDOWN; // Start cooldown immediately
 
+    // Remove preview line when hooking starts
+    if (this.grapplePreviewLine) {
+      this.scene.remove(this.grapplePreviewLine);
+      this.grapplePreviewLine.geometry.dispose();
+      (this.grapplePreviewLine.material as THREE.Material).dispose();
+      this.grapplePreviewLine = null;
+    }
+
+    // Visual feedback for hooking
     const geo = new THREE.BufferGeometry();
     const positions = new Float32Array(6);
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     const mat = new THREE.LineBasicMaterial({
-      color: 0x00ffcc, transparent: true, opacity: 0.7,
+      color: 0x00ffcc, transparent: true, opacity: 0.85, linewidth: 2,
     });
     this.grappleRope = new THREE.Line(geo, mat);
     this.scene.add(this.grappleRope);
+    this.updateWeaponHUD();
+  }
 
+  private completeGrapple(): void {
     // Cancel other movement states
     this.movement.isWallRunning = false;
     this.movement.isSliding = false;
     this.movement.isMantling = false;
 
+    // Add swing boost using tangent of rope direction
+    const toTarget = this.grappleTarget.clone().sub(this.group.position);
+    const dist = toTarget.length();
+    if (dist > 5) {
+      const playerVel = this.movement.vel;
+      const toTargetNorm = toTarget.clone().normalize();
+      const velDot = playerVel.dot(toTargetNorm);
+      const velToward = toTargetNorm.clone().multiplyScalar(velDot);
+      const velTangent = playerVel.clone().sub(velToward);
+      
+      if (velTangent.length() > 1) {
+        velTangent.multiplyScalar(this.GRAPPLE_TANGENT_BOOST);
+        this.movement.vel.copy(velTangent).add(velToward);
+      }
+    }
+
     soundManager.playSound('grapple', 0.4);
-    this.updateWeaponHUD();
   }
 
   private stopGrapple(): void {
-    if (!this.isGrappling) return;
+    if (!this.isGrappling && !this.grappleHooking) return;
+
+    // Give boost when releasing grapple based on current velocity
+    const velLen = this.movement.vel.length();
+    if (velLen > 5) {
+      this.movement.vel.multiplyScalar(1.15); // Slight boost on release
+    }
 
     this.isGrappling = false;
+    this.grappleHooking = false;
     this.grappleCooldown = this.GRAPPLE_COOLDOWN;
 
     if (this.grappleRope) {
@@ -1271,9 +1324,67 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     this.updateWeaponHUD();
   }
 
+  getGrappleCooldownPercent(): number {
+    if (this.grappleCooldown <= 0 && !this.grappleHooking) return 0;
+    return 1 - (this.grappleCooldown / this.GRAPPLE_COOLDOWN);
+  }
+
+  isGrappleReady(): boolean {
+    return this.grappleCooldown <= 0 && !this.grappleHooking;
+  }
+
   private updateGrapple(delta: number): void {
     if (this.grappleCooldown > 0) {
       this.grappleCooldown = Math.max(0, this.grappleCooldown - delta);
+    }
+
+    // Handle hooking delay (player can aim during this time)
+    if (this.grappleHooking) {
+      const elapsed = (performance.now() - this.grappleHookStartTime) / 1000;
+      const progress = Math.min(1, elapsed / this.grappleHookDuration);
+      
+      // Update hook indicator
+      if (this.onHookIndicatorUpdate) {
+        this.onHookIndicatorUpdate(progress);
+      }
+      
+      // Update grapple target based on where player is looking during hooking delay
+      if (elapsed < this.grappleHookDuration) {
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+        raycaster.far = this.GRAPPLE_RANGE;
+        const hits = raycaster.intersectObjects(this.getMeshes());
+        
+        if (hits.length > 0) {
+          this.grappleTarget.copy(hits[0].point);
+          this.grappleAimTarget.copy(hits[0].point);
+          
+          // Update rope visual
+          if (this.grappleRope) {
+            const ropeStart = this.group.position.clone();
+            ropeStart.y += 0.3;
+            const positions = this.grappleRope.geometry.attributes.position as THREE.BufferAttribute;
+            positions.setXYZ(0, ropeStart.x, ropeStart.y, ropeStart.z);
+            positions.setXYZ(1, this.grappleTarget.x, this.grappleTarget.y, this.grappleTarget.z);
+            positions.needsUpdate = true;
+          }
+        }
+        
+        return; // Still in hooking delay
+      } else {
+        // Hooking delay complete, start grapple
+        this.grappleHooking = false;
+        this.isGrappling = true;
+        this.completeGrapple();
+        
+        // Hide hook indicator
+        if (this.onHookIndicatorUpdate) {
+          this.onHookIndicatorUpdate(0, false);
+        }
+        
+        this.updateWeaponHUD();
+        return;
+      }
     }
 
     if (!this.isGrappling) return;
@@ -1283,36 +1394,49 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     const toTarget = this.grappleTarget.clone().sub(playerPos);
     const dist = toTarget.length();
 
-    if (dist < 1.5) {
+    // Release if reached target
+    if (dist < 2.0) {
       this.stopGrapple();
       return;
     }
 
-    // Cancel on jump
+    // Cancel on jump - gives small upward boost
     if (this.jumpJustPressed) {
-      m.vel.y = Math.max(m.vel.y, 11 * 0.7); // JUMP_FORCE * 0.7
+      m.vel.y = Math.max(m.vel.y, 9);
       this.stopGrapple();
       return;
     }
 
+    // Cancel on release
     if (!this.grappleKeyHeld) {
       this.stopGrapple();
       return;
     }
 
-    // Physics: pull toward target
-    const dir = toTarget.normalize();
-    m.vel.x += dir.x * this.GRAPPLE_PULL_SPEED * delta;
-    m.vel.y += dir.y * this.GRAPPLE_PULL_SPEED * delta;
-    m.vel.z += dir.z * this.GRAPPLE_PULL_SPEED * delta;
+    const dir = toTarget.clone().normalize();
 
-    // Reduced gravity while grappling
+    // Physics: pull toward target with rope tension
+    const pullForce = this.GRAPPLE_PULL_SPEED * delta;
+    
+    // Only pull if moving toward target or if velocity is low
+    const velTowardTarget = m.vel.dot(dir);
+    if (velTowardTarget < pullForce * 2) {
+      m.vel.add(dir.multiplyScalar(pullForce));
+    }
+
+    // Apply tangential swing boost (sling effect)
+    const tangentialVel = m.vel.clone().sub(dir.clone().multiplyScalar(velTowardTarget));
+    if (tangentialVel.length() > 2) {
+      m.vel.add(tangentialVel.clone().multiplyScalar(0.05));
+    }
+
+    // Apply reduced gravity while grappling
     m.vel.y += this.GRAPPLE_GRAVITY * delta;
 
-    // Cap speed
+    // Cap speed to prevent extreme velocities
     const speed = m.vel.length();
-    if (speed > 35) {
-      m.vel.multiplyScalar(35 / speed);
+    if (speed > 40) {
+      m.vel.multiplyScalar(40 / speed);
     }
 
     // Update rope visual
@@ -1601,6 +1725,70 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     this.scene.add(this.grenadeTrajectoryLine);
   }
 
+  private updateGrappleTrajectory(): void {
+    // Hide when pointer not locked or in menu
+    if (!document.pointerLockElement) {
+      if (this.grapplePreviewLine) {
+        this.scene.remove(this.grapplePreviewLine);
+        this.grapplePreviewLine.geometry.dispose();
+        (this.grapplePreviewLine.material as THREE.Material).dispose();
+        this.grapplePreviewLine = null;
+      }
+      return;
+    }
+
+    // Show preview when Q is held but not grappling
+    const shouldShow = this.grappleKeyHeld && !this.isGrappling && this.grappleCooldown <= 0;
+    
+    if (!shouldShow) {
+      if (this.grapplePreviewLine) {
+        this.scene.remove(this.grapplePreviewLine);
+        this.grapplePreviewLine.geometry.dispose();
+        (this.grapplePreviewLine.material as THREE.Material).dispose();
+        this.grapplePreviewLine = null;
+      }
+      return;
+    }
+
+    // Cast ray to find grapple point
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    raycaster.far = this.GRAPPLE_RANGE;
+
+    const hits = raycaster.intersectObjects(this.getMeshes());
+    
+    if (hits.length > 0) {
+      this.grappleAimTarget.copy(hits[0].point);
+      
+      // Create a dashed line showing grapple trajectory
+      const start = this.group.position.clone();
+      start.y += 0.3;
+      const end = this.grappleAimTarget.clone();
+      
+      // Update existing or create new
+      if (this.grapplePreviewLine) {
+        const positions = this.grapplePreviewLine.geometry.attributes.position as THREE.BufferAttribute;
+        positions.setXYZ(0, start.x, start.y, start.z);
+        positions.setXYZ(1, end.x, end.y, end.z);
+        positions.needsUpdate = true;
+      } else {
+        const points = [start, end];
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineDashedMaterial({
+          color: 0x00ffcc,
+          transparent: true,
+          opacity: 0.5,
+          dashSize: 1,
+          gapSize: 0.5,
+        });
+        
+        this.grapplePreviewLine = new THREE.Line(geometry, material);
+        (this.grapplePreviewLine as THREE.Line).computeLineDistances();
+        this.scene.add(this.grapplePreviewLine);
+      }
+    }
+  }
+
   /* ------------------------------------------------------------------ */
   /*  Camera & UI                                                        */
   /* ------------------------------------------------------------------ */
@@ -1692,10 +1880,19 @@ private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
     const grenadeColor = this.grenadeCount > 0 ? '#88cc88' : '#ff4444';
     const grenadeText = `<span style="color:${grenadeColor}">G: ${this.grenadeCount}</span>`;
 
-    const grappleReady = this.grappleCooldown <= 0;
+    const grappleReady = this.grappleCooldown <= 0 && !this.grappleHooking;
     const grappleColor = this.isGrappling ? '#00ffcc' : grappleReady ? '#88cc88' : '#666';
-    const grappleLabel = this.isGrappling ? 'GRAPPLE' : grappleReady ? 'READY' : `${this.grappleCooldown.toFixed(1)}s`;
-    const grappleText = `<span style="color:${grappleColor}">Q: ${grappleLabel}</span>`;
+    const grappleLabel = this.isGrappling ? 'GRAPPLING' : this.grappleHooking ? 'HOOKING...' : grappleReady ? 'READY' : `${this.grappleCooldown.toFixed(1)}s`;
+    const grappleProgress = grappleReady ? '' : `<div style="width:100%;height:2px;background:#333;margin-top:2px;"><div style="width:${(1 - this.grappleCooldown/this.GRAPPLE_COOLDOWN)*100}%;height:100%;background:${grappleColor};"></div></div>`;
+    
+    // Hook progress bar during hooking delay
+    let hookBar = '';
+    if (this.grappleHooking) {
+      const hookElapsed = Math.min(1, (performance.now() - this.grappleHookStartTime) / 1000 / this.grappleHookDuration);
+      hookBar = `<div style="width:100%;height:3px;background:#333;margin-top:3px;"><div style="width:${hookElapsed*100}%;height:100%;background:#00ffcc;"></div></div>`;
+    }
+    
+    const grappleText = `<span style="color:${grappleColor}">Q: ${grappleLabel}</span>${grappleProgress}${hookBar}`;
 
     container.innerHTML = `${weaponList}<br><br>${ammoText}<br>${grenadeText}<br>${grappleText}`;
   }

@@ -1,5 +1,5 @@
 export type ReticleStyle = 
-  | 'cross' | 'brackets' | 'precision' | 'diamond' | 'chevrons' | 'tshape' | 'circle' | 'ring' | 'corners';
+  | 'cross' | 'brackets' | 'precision' | 'diamond' | 'chevrons' | 'tshape' | 'circle' | 'ring' | 'corners' | 'three-arm';
 
 interface ReticleConfig {
   style: ReticleStyle;
@@ -9,7 +9,7 @@ interface ReticleConfig {
 }
 
 const WEAPON_RETICLES: Record<string, ReticleConfig> = {
-  'R-201': { style: 'cross', color: '#00ffcc', size: 16, spread: 4 },
+  'R-201': { style: 'three-arm', color: '#00ffcc', size: 16, spread: 4 },
   'EVA-8': { style: 'brackets', color: '#ff8844', size: 18, spread: 8 },
   'Kraber': { style: 'precision', color: '#ff2266', size: 24, spread: 2 },
   'EPG-1': { style: 'diamond', color: '#44aaff', size: 20, spread: 3 },
@@ -132,47 +132,87 @@ export class ReticleRenderer {
     const config = WEAPON_RETICLES[this.currentWeapon] || WEAPON_RETICLES['R-201'];
     const totalSpread = config.spread + this.dynamicSpread;
     
+    // Draw Dark Glow / Shadow for contrast
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.6;
+    this.drawReticleByStyle(ctx, cx, cy, totalSpread, config.size, config.style);
+
+    // Draw Main Reticle
     ctx.strokeStyle = config.color;
     ctx.fillStyle = config.color;
     ctx.lineWidth = 2;
     ctx.shadowColor = config.color;
     ctx.shadowBlur = 4;
     ctx.globalAlpha = 0.9;
-
-    switch (config.style) {
-      case 'cross':
-        this.drawCross(ctx, cx, cy, totalSpread, config.size);
-        break;
-      case 'brackets':
-        this.drawBrackets(ctx, cx, cy, totalSpread, config.size);
-        break;
-      case 'precision':
-        this.drawPrecision(ctx, cx, cy, totalSpread, config.size);
-        break;
-      case 'diamond':
-        this.drawDiamond(ctx, cx, cy, totalSpread, config.size);
-        break;
-      case 'chevrons':
-        this.drawChevrons(ctx, cx, cy, totalSpread, config.size);
-        break;
-      case 'tshape':
-        this.drawTShape(ctx, cx, cy, totalSpread, config.size);
-        break;
-      case 'circle':
-        this.drawCircle(ctx, cx, cy, totalSpread, config.size);
-        break;
-      case 'ring':
-        this.drawRing(ctx, cx, cy, totalSpread, config.size);
-        break;
-      case 'corners':
-        this.drawCorners(ctx, cx, cy, totalSpread, config.size);
-        break;
-    }
+    this.drawReticleByStyle(ctx, cx, cy, totalSpread, config.size, config.style);
 
     this.drawHitmarker(ctx, cx, cy);
 
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
+  }
+
+  private drawReticleByStyle(ctx: CanvasRenderingContext2D, cx: number, cy: number, spread: number, size: number, style: ReticleStyle): void {
+    switch (style) {
+      case 'cross':
+        this.drawCross(ctx, cx, cy, spread, size);
+        break;
+      case 'brackets':
+        this.drawBrackets(ctx, cx, cy, spread, size);
+        break;
+      case 'precision':
+        this.drawPrecision(ctx, cx, cy, spread, size);
+        break;
+      case 'diamond':
+        this.drawDiamond(ctx, cx, cy, spread, size);
+        break;
+      case 'chevrons':
+        this.drawChevrons(ctx, cx, cy, spread, size);
+        break;
+      case 'tshape':
+        this.drawTShape(ctx, cx, cy, spread, size);
+        break;
+      case 'circle':
+        this.drawCircle(ctx, cx, cy, spread, size);
+        break;
+      case 'ring':
+        this.drawRing(ctx, cx, cy, spread, size);
+        break;
+      case 'corners':
+        this.drawCorners(ctx, cx, cy, spread, size);
+        break;
+      case 'three-arm':
+        this.drawThreeArm(ctx, cx, cy, spread, size);
+        break;
+    }
+  }
+
+  private drawThreeArm(ctx: CanvasRenderingContext2D, cx: number, cy: number, spread: number, size: number): void {
+    const gap = spread + 6;
+    const len = size;
+    
+    ctx.beginPath();
+    // Top arm (vertical)
+    ctx.moveTo(cx, cy - gap - len);
+    ctx.lineTo(cx, cy - gap);
+    
+    // Bottom-left arm (120 deg from top)
+    const angleLeft = (210 * Math.PI) / 180;
+    ctx.moveTo(cx + Math.cos(angleLeft) * (gap + len), cy - Math.sin(angleLeft) * (gap + len));
+    ctx.lineTo(cx + Math.cos(angleLeft) * gap, cy - Math.sin(angleLeft) * gap);
+    
+    // Bottom-right arm (240 deg from top)
+    const angleRight = (330 * Math.PI) / 180;
+    ctx.moveTo(cx + Math.cos(angleRight) * (gap + len), cy - Math.sin(angleRight) * (gap + len));
+    ctx.lineTo(cx + Math.cos(angleRight) * gap, cy - Math.sin(angleRight) * gap);
+    
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   private drawCross(ctx: CanvasRenderingContext2D, cx: number, cy: number, spread: number, size: number): void {

@@ -3,6 +3,7 @@ import { BulletVisuals } from './weapons';
 
 export interface Bullet {
   mesh: THREE.Mesh;
+  meshType?: string;
   trail: THREE.Line | null;
   trailPositions: THREE.Vector3[];
   maxTrailLength: number;
@@ -33,26 +34,12 @@ export class BallisticsSystem {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(startPos);
 
-    // Orient bullet along velocity using quaternion
+    // Orient bullet along velocity
     if (velocity.length() > 0.1) {
-      const forward = velocity.clone().normalize();
-      const up = new THREE.Vector3(0, 1, 0);
-      
-      // Check if forward is nearly vertical
-      if (Math.abs(forward.y) > 0.99) {
-        // Use camera right or different up vector
-        up.set(1, 0, 0);
-      }
-      
-      const right = new THREE.Vector3().crossVectors(forward, up).normalize();
-      const correctedUp = new THREE.Vector3().crossVectors(right, forward).normalize();
-      
-      const matrix = new THREE.Matrix4();
-      matrix.makeBasis(right, correctedUp, forward);
-      mesh.quaternion.setFromRotationMatrix(matrix);
-      
+      const lookTarget = startPos.clone().add(velocity);
+      mesh.lookAt(lookTarget);
       if (visuals.meshType === 'capsule') {
-        mesh.rotateX(Math.PI / 2);
+        mesh.rotateX(-Math.PI / 2);
       }
     }
     this.scene.add(mesh);
@@ -64,8 +51,9 @@ export class BallisticsSystem {
       const trailMat = new THREE.LineBasicMaterial({
         color: visuals.trailColor,
         transparent: true,
-        opacity: 0.5,
-        linewidth: 2,
+        opacity: 0.8,
+        linewidth: 4,
+        blending: THREE.AdditiveBlending, // Glow effect
       });
       trail = new THREE.Line(trailGeo, trailMat);
       this.scene.add(trail);
@@ -73,6 +61,7 @@ export class BallisticsSystem {
 
     return {
       mesh,
+      meshType: visuals.meshType,
       trail,
       trailPositions: [mesh.position.clone()],
       maxTrailLength: visuals.trailLength || 20,
@@ -98,6 +87,10 @@ export class BallisticsSystem {
     if (bullet.velocity.length() > 0.1) {
       const lookTarget = bullet.mesh.position.clone().add(bullet.velocity);
       bullet.mesh.lookAt(lookTarget);
+      // Re-apply rotation for capsule mesh (originally Y-up)
+      if (bullet.meshType === 'capsule') {
+        bullet.mesh.rotateX(-Math.PI / 2);
+      }
     }
 
     // Update trail

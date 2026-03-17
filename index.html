@@ -72,47 +72,6 @@
         background: #00ffcc;
         transition: width 0.1s;
       }
-      #instructions {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: rgba(0, 0, 0, 0.8);
-        padding: 40px;
-        border: 2px solid #00ffcc;
-        color: #fff;
-        text-align: center;
-        z-index: 200;
-        cursor: pointer;
-      }
-      #instructions h1 {
-        font-size: 48px;
-        margin-bottom: 20px;
-        color: #00ffcc;
-        text-shadow: 0 0 20px #00ffcc;
-      }
-      #instructions p {
-        margin: 10px 0;
-        font-size: 16px;
-        opacity: 0.8;
-      }
-      #instructions .controls {
-        margin-top: 30px;
-        text-align: left;
-        font-size: 14px;
-      }
-      #instructions .controls div {
-        margin: 8px 0;
-      }
-      #instructions .key {
-        display: inline-block;
-        background: #00ffcc;
-        color: #000;
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-weight: bold;
-        margin-right: 10px;
-      }
       .hidden {
         display: none !important;
       }
@@ -133,69 +92,190 @@
     left: 0;
     width: 100%;
     height: 100%;
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a12 100%);
     display: flex;
     justify-content: center;
     align-items: center;
     z-index: 200;
     color: #00ffcc;
+    overflow: hidden;
+  }
+
+  .menu-overlay::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+    z-index: 201;
+    background-size: 100% 2px, 3px 100%;
+    pointer-events: none;
+  }
+
+  .menu-overlay::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(18, 16, 16, 0.1);
+    opacity: 0;
+    z-index: 202;
+    pointer-events: none;
+    animation: flicker 0.15s infinite;
+  }
+
+  @keyframes flicker {
+    0% { opacity: 0.1; }
+    100% { opacity: 0.2; }
+  }
+
+  .scanline {
+    width: 100%;
+    height: 100px;
+    z-index: 203;
+    background: linear-gradient(0deg, rgba(0, 255, 204, 0) 0%, rgba(0, 255, 204, 0.1) 50%, rgba(0, 255, 204, 0) 100%);
+    opacity: 0.1;
+    position: absolute;
+    bottom: 100%;
+    animation: scanline 10s linear infinite;
+    pointer-events: none;
+  }
+
+  @keyframes scanline {
+    0% { bottom: 100%; }
+    100% { bottom: -100px; }
   }
   
   .menu-content {
+    position: relative;
     text-align: center;
-    background: rgba(10, 10, 30, 0.8);
-    padding: 50px;
-    border: 2px solid #00ffcc;
-    border-radius: 10px;
-    box-shadow: 0 0 30px rgba(0, 255, 204, 0.3);
+    background: rgba(5, 5, 15, 0.85);
+    padding: 60px 80px;
+    border: 1px solid rgba(0, 255, 204, 0.3);
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(0, 255, 204, 0.05);
+    z-index: 210;
+    backdrop-filter: blur(10px);
+  }
+
+  .menu-content::before, .menu-content::after {
+    content: "";
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border-color: #00ffcc;
+    border-style: solid;
+    box-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
+  }
+
+  .menu-content::before {
+    top: -2px;
+    left: -2px;
+    border-width: 2px 0 0 2px;
+  }
+
+  .menu-content::after {
+    bottom: -2px;
+    right: -2px;
+    border-width: 0 2px 2px 0;
   }
   
   .menu-content h1 {
-    font-size: 48px;
-    margin-bottom: 20px;
+    font-size: 64px;
+    letter-spacing: 8px;
+    margin-bottom: 5px;
     color: #00ffcc;
-    text-shadow: 0 0 20px #00ffcc;
+    text-shadow: 0 0 15px rgba(0, 255, 204, 0.7);
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .menu-subtitle {
+    font-size: 14px;
+    letter-spacing: 4px;
+    margin-bottom: 40px;
+    opacity: 0.6;
+    color: #00ffcc;
+    text-transform: uppercase;
   }
   
   .menu-button {
+    position: relative;
     display: block;
-    width: 250px;
-    padding: 12px;
-    margin: 10px auto;
-    font-size: 18px;
-    background: #00ffcc;
-    color: #000;
-    border: none;
-    border-radius: 5px;
+    width: 280px;
+    padding: 15px;
+    margin: 15px auto;
+    font-size: 16px;
+    background: transparent;
+    color: #00ffcc;
+    border: 1px solid rgba(0, 255, 204, 0.5);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
     font-family: 'Orbitron', sans-serif;
-    font-weight: bold;
+    font-weight: 400;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
   }
   
-  .menu-button:hover {
-    background: #00ccaa;
-    transform: scale(1.05);
-    box-shadow: 0 0 15px rgba(0, 255, 204, 0.5);
+  .menu-button:hover, .menu-button.focused {
+    background: rgba(0, 255, 204, 0.15);
+    color: #fff;
+    border-color: #00ffcc;
+    transform: translateX(10px);
+    box-shadow: -5px 0 0 #00ffcc, 0 0 20px rgba(0, 255, 204, 0.2);
+    outline: none;
+  }
+
+  .menu-button::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #00ffcc;
+    z-index: -1;
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.3s ease;
+  }
+
+  .menu-button:hover::before {
+    /* transform: scaleX(1); */ /* Removed for a cleaner ghost look, or keep if you want solid fill */
   }
   
   .menu-button:active {
-    transform: scale(0.98);
+    transform: scale(0.95) translateX(5px);
   }
   
   #level-list {
-    margin: 20px 0;
-    max-height: 300px;
+    margin: 25px 0;
+    max-height: 400px;
     overflow-y: auto;
-    text-align: left;
+    padding-right: 10px;
+  }
+
+  #level-list::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  #level-list::-webkit-scrollbar-track {
+    background: rgba(0, 255, 204, 0.05);
+  }
+
+  #level-list::-webkit-scrollbar-thumb {
+    background: #00ffcc;
   }
   
   #level-list .menu-button {
     width: 100%;
-    margin: 5px 0;
-  }
-  
-  #level-list .menu-button:hover {
-    background: #00ccaa;
+    margin: 8px 0;
+    text-align: left;
+    padding-left: 30px;
+    font-size: 14px;
   }
 </style>

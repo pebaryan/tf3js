@@ -4,31 +4,51 @@ import * as CANNON from 'cannon-es';
 // --- Procedural grid texture (1m squares) for measuring displacement ---
 function makeGridTexture(gridColor: number, bgColor: number, size: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
+  canvas.width = 512;
+  canvas.height = 512;
   const ctx = canvas.getContext('2d')!;
 
+  // Base background
   ctx.fillStyle = '#' + bgColor.toString(16).padStart(6, '0');
-  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillRect(0, 0, 512, 512);
 
+  // Add subtle digital "circuitry" noise
+  ctx.globalAlpha = 0.05;
+  ctx.strokeStyle = '#ffffff';
+  for (let i = 0; i < 20; i++) {
+    const x = Math.floor(Math.random() * 8) * 64;
+    const y = Math.floor(Math.random() * 8) * 64;
+    ctx.strokeRect(x, y, 64, 64);
+  }
+  ctx.globalAlpha = 1;
+
+  // Draw grid lines
   ctx.strokeStyle = '#' + gridColor.toString(16).padStart(6, '0');
   ctx.lineWidth = 2;
-  const step = 256 / size;
+  const step = 512 / size;
   for (let i = 0; i <= size; i++) {
     const p = i * step;
-    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, 256); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(256, p); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, 512); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(512, p); ctx.stroke();
   }
 
+  // Digital "scanline" effect
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+  for (let i = 0; i < 512; i += 4) {
+    ctx.fillRect(0, i, 512, 1);
+  }
+
+  // Crosshairs / Technical markers
   ctx.strokeStyle = '#' + gridColor.toString(16).padStart(6, '0');
   ctx.lineWidth = 1;
   ctx.globalAlpha = 0.4;
-  for (let i = 0; i <= size; i++) {
-    for (let j = 0; j <= size; j++) {
+  for (let i = 0; i < size; i++) {
+    for (let j = 0; j < size; j++) {
       const cx = (i + 0.5) * step;
       const cy = (j + 0.5) * step;
-      ctx.beginPath(); ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3); ctx.stroke();
+      const r = 15;
+      ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); ctx.stroke();
     }
   }
   ctx.globalAlpha = 1;
@@ -36,55 +56,94 @@ function makeGridTexture(gridColor: number, bgColor: number, size: number): THRE
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
   return tex;
 }
 
 // All textures: 1 canvas tile = 1 meter
-const floorTex = makeGridTexture(0x334466, 0x1a1a2e, 1);
+// War Games Palette: Sharp White, Dark Navy Blue Grid (0x001133), High-Intensity Cyan (0x00ffff)
+const floorTex = makeGridTexture(0x001133, 0xf0f0f0, 1);
 floorTex.repeat.set(100, 100);
 
-const wallTex = makeGridTexture(0x445577, 0x2a2a4a, 1);
+const wallTex = makeGridTexture(0x00081a, 0xffffff, 1);
 wallTex.repeat.set(1, 1);
 
-const platTex = makeGridTexture(0x556688, 0x3a3a5a, 1);
+const platTex = makeGridTexture(0x00081a, 0xe0e0e0, 1);
 platTex.repeat.set(1, 1);
 
 const wallMaterial = new THREE.MeshStandardMaterial({
-  color: 0xaaaacc,
+  color: 0xffffff,
   map: wallTex,
-  metalness: 0.3,
+  metalness: 0.15,
   roughness: 0.6,
 });
 
 const floorMaterial = new THREE.MeshStandardMaterial({
-  color: 0x8888aa,
+  color: 0xffffff,
   map: floorTex,
-  metalness: 0.2,
+  metalness: 0.1,
   roughness: 0.8,
 });
 
 const platformMaterial = new THREE.MeshStandardMaterial({
-  color: 0x9999bb,
+  color: 0xffffff,
   map: platTex,
-  metalness: 0.3,
+  metalness: 0.15,
   roughness: 0.6,
 });
 
 const accentMaterial = new THREE.MeshStandardMaterial({
-  color: 0x00ffcc,
-  emissive: 0x00ffcc,
-  emissiveIntensity: 0.3,
+  color: 0x00ffff,
+  emissive: 0x00ffff,
+  emissiveIntensity: 3.0,
+});
+
+const neonMaterial = new THREE.MeshStandardMaterial({
+  color: 0x00ffff,
+  emissive: 0x00ffff,
+  emissiveIntensity: 6.0,
+  transparent: true,
+  opacity: 0.95
 });
 
 const slideRampMaterial = new THREE.MeshStandardMaterial({
-  color: 0xffaa44,
+  color: 0xff6600,
   map: platTex,
-  metalness: 0.2,
+  metalness: 0.15,
   roughness: 0.5,
 });
 
+let neonStrips: THREE.Mesh[] = [];
+
+export function updateLevelVisuals(time: number) {
+  const pulse = 0.5 + Math.sin(time * 2) * 0.5;
+  neonMaterial.emissiveIntensity = 1.0 + pulse * 2.0;
+  neonMaterial.opacity = 0.6 + pulse * 0.4;
+}
+
+function addNeonAccents(mesh: THREE.Mesh, w: number, h: number, d: number) {
+  // Add a thin neon strip at the top and bottom of walls
+  const stripHeight = 0.05;
+  const stripDepth = 0.02;
+  
+  // Top strips
+  const topGeo = new THREE.BoxGeometry(w + 0.02, stripHeight, d + 0.02);
+  const topStrip = new THREE.Mesh(topGeo, neonMaterial);
+  topStrip.position.y = h / 2 - stripHeight;
+  mesh.add(topStrip);
+  neonStrips.push(topStrip);
+
+  // Bottom strips
+  const botGeo = new THREE.BoxGeometry(w + 0.02, stripHeight, d + 0.02);
+  const botStrip = new THREE.Mesh(botGeo, neonMaterial);
+  botStrip.position.y = -h / 2 + stripHeight;
+  mesh.add(botStrip);
+  neonStrips.push(botStrip);
+}
+
 export function createLevel(scene: THREE.Scene, world: CANNON.World, levelConfig?: { layout: string, type: string }) {
   const config = levelConfig || { layout: 'open', type: 'training' };
+  neonStrips = []; // Reset neon strips
   const floorGeo = new THREE.PlaneGeometry(200, 200);
   const floor = new THREE.Mesh(floorGeo, floorMaterial);
   floor.rotation.x = -Math.PI / 2;
@@ -280,6 +339,8 @@ function createWall(x: number, height: number, z: number, width: number, depth: 
   wall.receiveShadow = true;
   scene.add(wall);
 
+  addNeonAccents(wall, width, height, depth);
+
   const shape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2));
   const body = new CANNON.Body({ mass: 0 });
   body.addShape(shape);
@@ -295,6 +356,8 @@ function createPlatform(x: number, y: number, z: number, width: number, height: 
   platform.castShadow = true;
   platform.receiveShadow = true;
   scene.add(platform);
+
+  addNeonAccents(platform, width, height, depth);
 
   const shape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2));
   const body = new CANNON.Body({ mass: 0 });
@@ -316,6 +379,8 @@ function createSlideRamp(x: number, y: number, z: number, width: number, length:
   ramp.castShadow = true;
   ramp.receiveShadow = true;
   scene.add(ramp);
+
+  addNeonAccents(ramp, width, height, length);
 
   // Cannon box shape (simpler than rotated trimesh)
   const shape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, length / 2));
@@ -344,7 +409,7 @@ function createDistanceMarker(x: number, y: number, z: number, text: string, sce
   const geo = new THREE.PlaneGeometry(2, 1);
   const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(x, y + 0.5, z);
+  mesh.position.set(x, 0.01, z); // Grounded on floor
   mesh.rotation.x = -Math.PI / 2;
   scene.add(mesh);
 }

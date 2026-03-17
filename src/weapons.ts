@@ -1,3 +1,35 @@
+export type AttachmentType = 'optic' | 'magazine' | 'barrel' | 'stock';
+
+export interface Attachment {
+  id: string;
+  name: string;
+  type: AttachmentType;
+  description: string;
+  modifiers?: {
+    recoilMult?: number;
+    reloadTimeMult?: number;
+    magSizeBonus?: number;
+    accuracyMult?: number;
+    zoomMult?: number;
+    damageMult?: number;
+  };
+}
+
+export const ATTACHMENTS: Record<string, Attachment> = {
+  // Optics
+  'hcog': { id: 'hcog', name: 'HCog', type: 'optic', description: 'Red dot sight. 1.2x zoom.', modifiers: { zoomMult: 1.2 } },
+  'ranger': { id: 'ranger', name: 'HCOG Ranger', type: 'optic', description: 'Enhanced zoom optic. 2.0x zoom.', modifiers: { zoomMult: 2.0, accuracyMult: 0.8 } },
+  'threat': { id: 'threat', name: 'Threat Scope', type: 'optic', description: 'Thermal optic. Highlights targets. 1.5x zoom.', modifiers: { zoomMult: 1.5 } },
+  
+  // Magazines
+  'extended_mag': { id: 'extended_mag', name: 'Extended Mag', type: 'magazine', description: 'Increases magazine capacity.', modifiers: { magSizeBonus: 8 } },
+  'fast_mag': { id: 'fast_mag', name: 'Quick Reload', type: 'magazine', description: 'Faster reload speeds.', modifiers: { reloadTimeMult: 0.7 } },
+  
+  // Barrels
+  'stabilizer': { id: 'stabilizer', name: 'Stabilizer', type: 'barrel', description: 'Reduces recoil.', modifiers: { recoilMult: 0.7 } },
+  'suppressor': { id: 'suppressor', name: 'Suppressor', type: 'barrel', description: 'Reduced muzzle flash and sound.', modifiers: { recoilMult: 1.1, damageMult: 0.9 } },
+};
+
 export interface BulletVisuals {
   meshType: 'capsule' | 'sphere';
   color: number;
@@ -27,6 +59,12 @@ export interface Weapon {
   muzzleFlash: boolean;
   soundId: string;
   bulletVisuals: BulletVisuals;
+  attachments: {
+    optic?: Attachment;
+    magazine?: Attachment;
+    barrel?: Attachment;
+    stock?: Attachment;
+  };
 }
 
 // --- Pilot weapons ---
@@ -59,6 +97,7 @@ export const R201_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 // EVA-8: Auto shotgun. Fast fire for a shotgun, wide spread, short range.
@@ -89,6 +128,7 @@ export const EVA8_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 // Kraber: Anti-materiel sniper. Bolt-action, one-shot kill, heavy bullet drop at range.
@@ -119,9 +159,10 @@ export const KRABER_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
-// EPG-1: Energy grenade launcher. Slow projectile, splash damage, arc trajectory.
+// EPG-1: Energy grenade launcher. Slow projectile, splash damage, straight trajectory.
 export const EPG_WEAPON: Weapon = {
   name: 'EPG-1',
   damage: 80,
@@ -144,11 +185,12 @@ export const EPG_WEAPON: Weapon = {
     hasTrail: true,
     trailColor: 0x2288ff,
     trailLength: 40,
-    gravity: -12,
+    gravity: 0,
     maxLifetime: 4,
     explosive: true,
     splashRadius: 5,
   },
+  attachments: {},
 };
 
 // Alternator: Slow-firing SMG with high damage per bullet. ~360 RPM, punchy.
@@ -179,6 +221,7 @@ export const ALTERNATOR_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 // CAR: High fire rate SMG, very accurate, low damage per shot. ~900 RPM.
@@ -209,6 +252,7 @@ export const CAR_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 // Flatline: Heavy AR. Higher damage than R-201, more horizontal recoil, slower fire. ~540 RPM.
@@ -239,6 +283,7 @@ export const FLATLINE_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 // Mastiff: Energy shotgun. Horizontal spread, slow fire, devastating up close.
@@ -269,6 +314,7 @@ export const MASTIFF_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 // Wingman Elite: Heavy revolver. High damage, slow fire, precise. ~240 RPM.
@@ -299,6 +345,7 @@ export const WINGMAN_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 // L-STAR: Energy LMG. Large slow projectiles, no bullet drop, high spread. ~480 RPM.
@@ -329,6 +376,7 @@ export const LSTAR_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 // --- Pilot weapon loadout ---
@@ -375,6 +423,7 @@ export const TITAN_WEAPON: Weapon = {
     explosive: false,
     splashRadius: 0,
   },
+  attachments: {},
 };
 
 export class WeaponManager {
@@ -386,7 +435,7 @@ export class WeaponManager {
 
   addWeapon(weapon: Weapon): Weapon {
     this.weapons.push(weapon);
-    this.ammo.push(weapon.magazineSize);
+    this.ammo.push(this.getEffectiveMagazineSize(weapon));
     return weapon;
   }
 
@@ -438,9 +487,61 @@ export class WeaponManager {
     if (index < 0 || index >= this.weapons.length) return null;
     const old = this.weapons[index];
     this.weapons[index] = newWeapon;
-    this.ammo[index] = newWeapon.magazineSize;
+    this.ammo[index] = this.getEffectiveMagazineSize(newWeapon);
     this.cancelReload();
     return old;
+  }
+
+  // --- Attachment Support ---
+
+  attach(index: number, attachment: Attachment): void {
+    const weapon = this.weapons[index];
+    if (!weapon) return;
+    weapon.attachments[attachment.type] = attachment;
+    // Cap ammo to new magazine size if needed
+    const newMax = this.getEffectiveMagazineSize(weapon);
+    if (this.ammo[index] > newMax) this.ammo[index] = newMax;
+  }
+
+  detach(index: number, type: AttachmentType): void {
+    const weapon = this.weapons[index];
+    if (!weapon) return;
+    delete weapon.attachments[type];
+    const newMax = this.getEffectiveMagazineSize(weapon);
+    if (this.ammo[index] > newMax) this.ammo[index] = newMax;
+  }
+
+  // --- Effective Stat Helpers ---
+
+  getEffectiveRecoil(weapon: Weapon): { x: number, y: number, z: number } {
+    let mult = 1.0;
+    if (weapon.attachments.barrel?.modifiers?.recoilMult) mult *= weapon.attachments.barrel.modifiers.recoilMult;
+    if (weapon.attachments.stock?.modifiers?.recoilMult) mult *= weapon.attachments.stock.modifiers.recoilMult;
+    return { x: weapon.recoil.x * mult, y: weapon.recoil.y * mult, z: weapon.recoil.z * mult };
+  }
+
+  getEffectiveReloadTime(weapon: Weapon): number {
+    let mult = 1.0;
+    if (weapon.attachments.magazine?.modifiers?.reloadTimeMult) mult *= weapon.attachments.magazine.modifiers.reloadTimeMult;
+    return weapon.reloadTime * mult;
+  }
+
+  getEffectiveMagazineSize(weapon: Weapon): number {
+    let bonus = 0;
+    if (weapon.attachments.magazine?.modifiers?.magSizeBonus) bonus += weapon.attachments.magazine.modifiers.magSizeBonus;
+    return weapon.magazineSize + bonus;
+  }
+
+  getEffectiveZoom(weapon: Weapon): number {
+    if (weapon.attachments.optic?.modifiers?.zoomMult) return weapon.attachments.optic.modifiers.zoomMult;
+    return 1.0;
+  }
+
+  getEffectiveAccuracy(weapon: Weapon): number {
+    let mult = 1.0;
+    if (weapon.attachments.optic?.modifiers?.accuracyMult) mult *= weapon.attachments.optic.modifiers.accuracyMult;
+    if (weapon.attachments.stock?.modifiers?.accuracyMult) mult *= weapon.attachments.stock.modifiers.accuracyMult;
+    return weapon.accuracy * mult;
   }
 
   // --- Ammo & Reload ---
@@ -461,11 +562,13 @@ export class WeaponManager {
   }
 
   startReload(): boolean {
-    if (this.reloading) return false;
     const w = this.weapons[this.currentIndex];
-    if (!w || this.ammo[this.currentIndex] >= w.magazineSize) return false;
+    if (!w) return false;
+    if (this.reloading) return false;
+    const max = this.getEffectiveMagazineSize(w);
+    if (this.ammo[this.currentIndex] >= max) return false;
     this.reloading = true;
-    this.reloadTimer = w.reloadTime;
+    this.reloadTimer = this.getEffectiveReloadTime(w);
     return true;
   }
 
@@ -481,7 +584,7 @@ export class WeaponManager {
       this.reloading = false;
       this.reloadTimer = 0;
       const w = this.weapons[this.currentIndex];
-      if (w) this.ammo[this.currentIndex] = w.magazineSize;
+      if (w) this.ammo[this.currentIndex] = this.getEffectiveMagazineSize(w);
       return true; // reload finished
     }
     return false;
@@ -491,6 +594,6 @@ export class WeaponManager {
     if (!this.reloading) return 1;
     const w = this.weapons[this.currentIndex];
     if (!w) return 1;
-    return 1 - this.reloadTimer / w.reloadTime;
+    return 1 - this.reloadTimer / this.getEffectiveReloadTime(w);
   }
 }

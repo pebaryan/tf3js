@@ -299,7 +299,8 @@ export class ImpactEffectsRenderer {
       Math.floor(Math.random() * (config.sparkCountMax - config.sparkCountMin + 1));
     for (let i = 0; i < sparkCount; i++) {
       const size = config.sparkMinSize + Math.random() * (config.sparkMaxSize - config.sparkMinSize);
-      const sparkGeo = new THREE.SphereGeometry(size, 4, 4);
+      // Elongated streak for sparks
+      const sparkGeo = new THREE.CylinderGeometry(size * 0.5, size * 0.5, size * 4, 4);
       const sparkMat = new THREE.MeshBasicMaterial({
         color: config.sparkColor,
         transparent: true,
@@ -316,11 +317,15 @@ export class ImpactEffectsRenderer {
       );
       const dir = n.clone().multiplyScalar(0.9).add(rand).normalize();
       const speed = config.sparkSpeedMin + Math.random() * (config.sparkSpeedMax - config.sparkSpeedMin);
+      const velocity = dir.multiplyScalar(speed);
+
+      // Orient spark along its velocity
+      spark.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
 
       this.scene.add(spark);
       this.particles.push({
         mesh: spark,
-        velocity: dir.multiplyScalar(speed),
+        velocity: velocity,
         gravity: config.sparkGravity,
         life: config.sparkLifeMin + Math.random() * (config.sparkLifeMax - config.sparkLifeMin),
         maxLife: config.sparkMaxLife,
@@ -335,6 +340,12 @@ export class ImpactEffectsRenderer {
       p.life -= delta;
       p.velocity.y += p.gravity * delta;
       p.mesh.position.add(p.velocity.clone().multiplyScalar(delta));
+      
+      // Orient spark along its velocity
+      if (p.velocity.lengthSq() > 0.01) {
+        p.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), p.velocity.clone().normalize());
+      }
+
       p.mesh.scale.multiplyScalar(0.98);
       (p.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, p.life / p.maxLife);
 

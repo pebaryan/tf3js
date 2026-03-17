@@ -2,18 +2,26 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { Target } from './target';
 import { Enemy } from './enemy';
-import { createLevel } from './level';
+import { createLevel, updateLevelVisuals } from './level';
 import { LevelType, Level, LEVELS } from './levels';
-import { Player } from './player';
+import { Player, createWeaponMesh } from './player';
 import { Titan, TitanState } from './titan';
 import { GameState, GameStats } from './types';
 import { GameUI } from './ui';
-import { Weapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
+import { Weapon, Attachment, ATTACHMENTS, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
 import { getBindings, keyCodeToLabel } from './keybindings';
 // import { soundManager } from './sound';
 
 interface WeaponPickup {
   weapon: Weapon;
+  mesh: THREE.Group;
+  position: THREE.Vector3;
+  baseY: number;
+  cooldown: number;
+}
+
+interface AttachmentPickup {
+  attachment: Attachment;
   mesh: THREE.Group;
   position: THREE.Vector3;
   baseY: number;
@@ -34,11 +42,15 @@ export class Game {
   checkpoints: any[] = [];
   titan: Titan | null = null;
   private weaponPickups: WeaponPickup[] = [];
+  private attachmentPickups: AttachmentPickup[] = [];
   private pickupPromptEl: HTMLElement | null = null;
   private activePickupHold: WeaponPickup | null = null;
+  private activeAttachmentHold: AttachmentPickup | null = null;
+  private activeTitanHold = false;
   private activePickupHoldTime = 0;
   private readonly PICKUP_RANGE = 2;
   private readonly PICKUP_PROMPT_RANGE = 4;
+  private readonly TITAN_EMBARK_HOLD_TIME = 0.5;
   private readonly PICKUP_HOLD_TIME = 0.35;
 
   state: GameState = GameState.MAIN_MENU;
@@ -83,7 +95,7 @@ export class Game {
     this.clock = new THREE.Clock();
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0x0a0a1e, 80, 300);
+    this.scene.fog = new THREE.FogExp2(0xd0e0e8, 0.005); // Brighter, light blue fog
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     this.camera.position.set(0, 2, 0);
@@ -95,21 +107,21 @@ export class Game {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMappingExposure = 1.4; // Boosted for simulation look
     this.gameContainer.appendChild(this.renderer.domElement);
 
     // Sky dome
     this.createSkyDome();
 
-    // Hemisphere light: sky blue from above, ground warm from below
-    const hemiLight = new THREE.HemisphereLight(0x334466, 0x221122, 0.6);
+    // Hemisphere light: bright sky blue and clear neutral bounce
+    const hemiLight = new THREE.HemisphereLight(0xbadcf5, 0xffffff, 0.9);
     this.scene.add(hemiLight);
 
-    this.ambientLight = new THREE.AmbientLight(0x404060, 0.4);
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.2); // Lower ambient for better shadows
     this.scene.add(this.ambientLight);
 
-    // Sun-like directional light — warm orange tint, lower angle for dramatic shadows
-    this.directionalLight = new THREE.DirectionalLight(0xffd4a0, 1.4);
+    // Sun-like directional light — very bright, clear simulation sun
+    this.directionalLight = new THREE.DirectionalLight(0xffffff, 2.2); // Stronger directional for contrast
     this.directionalLight.position.set(-40, 60, -50);
     this.directionalLight.castShadow = true;
     this.directionalLight.shadow.mapSize.width = 2048;
@@ -130,40 +142,47 @@ export class Game {
 
   private createSkyDome() {
     const canvas = document.createElement('canvas');
-    canvas.width = 512;
+    canvas.width = 1024;
     canvas.height = 512;
     const ctx = canvas.getContext('2d')!;
 
-    // Gradient: horizon warm haze → mid deep blue → zenith dark purple
+    // Gradient: bright cyan/teal horizon → light blue → white zenith
     const grad = ctx.createLinearGradient(0, 512, 0, 0);
-    grad.addColorStop(0.0, '#1a1018');   // horizon — warm dark
-    grad.addColorStop(0.15, '#2a1428');  // low — reddish haze
-    grad.addColorStop(0.35, '#0e1030');  // mid-low — deep navy
-    grad.addColorStop(0.6, '#0a0c28');   // mid — dark blue
-    grad.addColorStop(1.0, '#060818');   // zenith — near black
+    grad.addColorStop(0.0, '#a5dff5');   // horizon
+    grad.addColorStop(0.2, '#badcf5');  // low
+    grad.addColorStop(0.6, '#d0e0e8');  // mid
+    grad.addColorStop(1.0, '#ffffff');  // zenith
 
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 512, 512);
+    ctx.fillRect(0, 0, 1024, 512);
 
-    // Scatter stars in upper half
-    for (let i = 0; i < 200; i++) {
-      const x = Math.random() * 512;
-      const y = Math.random() * 350; // upper 70%
-      const r = Math.random() * 1.2 + 0.3;
-      const brightness = Math.floor(Math.random() * 100 + 155);
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${brightness}, ${brightness}, ${Math.min(255, brightness + 40)}, ${0.4 + Math.random() * 0.6})`;
-      ctx.fill();
+    // Subtle digital grid in the sky
+    ctx.strokeStyle = 'rgba(0, 255, 204, 0.15)';
+    ctx.lineWidth = 1;
+    const gridSpacing = 64;
+    for (let x = 0; x <= 1024; x += gridSpacing) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 512); ctx.stroke();
+    }
+    for (let y = 0; y <= 512; y += gridSpacing) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(1024, y); ctx.stroke();
     }
 
-    // A few brighter stars
+    // Add bright "data" particles / squares instead of stars
+    for (let i = 0; i < 150; i++) {
+      const x = Math.random() * 1024;
+      const y = Math.random() * 400;
+      const s = Math.random() * 3 + 1;
+      ctx.fillStyle = Math.random() > 0.5 ? 'rgba(0, 255, 204, 0.4)' : 'rgba(255, 102, 0, 0.4)';
+      ctx.fillRect(x, y, s, s);
+    }
+
+    // A few brighter data nodes
     for (let i = 0; i < 15; i++) {
-      const x = Math.random() * 512;
+      const x = Math.random() * 1024;
       const y = Math.random() * 256;
       ctx.beginPath();
-      ctx.arc(x, y, Math.random() * 1.5 + 1, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(220, 230, 255, ${0.6 + Math.random() * 0.4})`;
+      ctx.arc(x, y, Math.random() * 3 + 2, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.6 + Math.random() * 0.4})`;
       ctx.fill();
     }
 
@@ -275,7 +294,7 @@ export class Game {
   private createTitanCallAnimation(position: THREE.Vector3): void {
     const ringGeo = new THREE.RingGeometry(0.5, 1, 32);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xff6600,
+      color: 0x00ffcc,
       transparent: true,
       opacity: 0.8,
       side: THREE.DoubleSide
@@ -524,6 +543,9 @@ export class Game {
 
     this.player.update(delta, this.targets, this.enemies);
     this.targets.forEach(target => target.update(delta, this.camera.position));
+    
+    // Update level-specific visuals (like pulsing neon strips)
+    updateLevelVisuals(performance.now() * 0.001);
 
     // Update radar with enemy positions
     const enemyData = this.enemies.map(e => ({
@@ -579,7 +601,7 @@ export class Game {
       this.ui.showEmbarkIndicator(false);
     }
 
-    this.updateWeaponPickups(delta);
+    this.updateInteractions(delta);
     this.updateHUD();
     this.checkLevelCompletion();
     this.stats.time = (Date.now() - this.levelStartTime) / 1000;
@@ -602,46 +624,163 @@ export class Game {
     for (const def of pickupDefs) {
       const pickup = this.createPickupMesh(def.weapon, def.pos);
       this.weaponPickups.push(pickup);
+
+      // Randomly spawn an attachment nearby
+      if (Math.random() > 0.4) {
+        const atts = Object.values(ATTACHMENTS);
+        const att = atts[Math.floor(Math.random() * atts.length)];
+        const attPos = def.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 4, 0, (Math.random() - 0.5) * 4));
+        this.createAttachmentPickup(att, attPos);
+      }
     }
   }
 
+  private createAttachmentPickup(attachment: Attachment, position: THREE.Vector3): void {
+    const group = new THREE.Group();
+    const color = 0x00ffcc;
+
+    // Technical Diamond Shape
+    const geo = new THREE.OctahedronGeometry(0.2, 0);
+    const mat = new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 2.0,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.y = 0.4;
+    group.add(mesh);
+
+    // Aura
+    const aura = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 8, 8),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending })
+    );
+    aura.position.y = 0.4;
+    group.add(aura);
+
+    group.position.copy(position);
+    this.scene.add(group);
+
+    this.attachmentPickups.push({
+      attachment,
+      mesh: group,
+      position: position.clone(),
+      baseY: position.y,
+      cooldown: 0
+    });
+  }
+
+  private updateAttachmentPickups(delta: number) {
+    if (!this.player) return;
+    const time = performance.now() * 0.001;
+    let nearestAtt: AttachmentPickup | null = null;
+    let nearestDist = Infinity;
+
+    for (const pickup of this.attachmentPickups) {
+      if (pickup.cooldown > 0) {
+        pickup.cooldown -= delta;
+        pickup.mesh.visible = pickup.cooldown <= 0;
+        continue;
+      }
+      pickup.mesh.rotation.y += 3.0 * delta;
+      pickup.mesh.position.y = pickup.baseY + Math.sin(time * 4) * 0.05;
+      const dist = this.player.group.position.distanceTo(pickup.position);
+      if (dist < this.PICKUP_PROMPT_RANGE && dist < nearestDist) {
+        nearestDist = dist;
+        nearestAtt = pickup;
+      }
+    }
+
+    const canHold = !!nearestAtt && nearestDist < this.PICKUP_RANGE && this.player.isInteractHeld() && !this.player.isInteractConsumed();
+
+    if (canHold && nearestAtt) {
+      if (this.activeAttachmentHold !== nearestAtt) {
+        this.activeAttachmentHold = nearestAtt;
+        this.activePickupHoldTime = 0;
+      }
+      this.activePickupHoldTime = Math.min(this.PICKUP_HOLD_TIME, this.activePickupHoldTime + delta);
+      if (this.activePickupHoldTime >= this.PICKUP_HOLD_TIME) {
+        const weaponIdx = this.player['weaponManager'].getCurrentIndex();
+        this.player['weaponManager'].attach(weaponIdx, nearestAtt.attachment);
+        this.player['rebuildWeaponMesh']();
+        this.player['updateWeaponHUD']();
+        nearestAtt.mesh.visible = false;
+        nearestAtt.cooldown = 1000000;
+        this.player.consumeInteractHold();
+        this.activeAttachmentHold = null;
+        this.activePickupHoldTime = 0;
+      }
+    } else {
+      if (this.activeAttachmentHold === nearestAtt) {
+        this.activeAttachmentHold = null;
+        this.activePickupHoldTime = 0;
+      }
+    }
+
+    if (nearestAtt && !this.activePickupHold) {
+      const holdProgress = this.activeAttachmentHold === nearestAtt ? this.activePickupHoldTime / this.PICKUP_HOLD_TIME : 0;
+      this.updateAttachmentPrompt(nearestAtt, holdProgress);
+    }
+  }
+
+  private updateAttachmentPrompt(pickup: AttachmentPickup, holdProgress: number) {
+    if (!this.pickupPromptEl) {
+      this.pickupPromptEl = document.createElement('div');
+      this.pickupPromptEl.style.cssText = 'position:fixed;bottom:180px;left:50%;transform:translateX(-50%);color:#fff;font:14px monospace;z-index:100;background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:4px;text-align:center;pointer-events:none;';
+      document.body.appendChild(this.pickupPromptEl);
+    }
+    this.pickupPromptEl.style.display = 'block';
+    const interactKey = keyCodeToLabel(getBindings().embark);
+    const progressPct = Math.round(holdProgress * 100);
+    const color = '#00ffcc';
+    const progressBar = `<div style="margin-top:6px;width:220px;height:6px;background:rgba(255,255,255,0.15);border-radius:999px;overflow:hidden;"><div style="width:${progressPct}%;height:100%;background:${color};"></div></div>`;
+    this.pickupPromptEl.innerHTML = `Hold [${interactKey}] to equip <span style="color:${color}">${pickup.attachment.name}</span>${progressBar}`;
+  }
   private createPickupMesh(weapon: Weapon, position: THREE.Vector3): WeaponPickup {
     const group = new THREE.Group();
     const color = weapon.bulletVisuals.color;
 
-    // Weapon indicator box
-    const boxGeo = new THREE.BoxGeometry(0.12, 0.08, 0.35);
-    const boxMat = new THREE.MeshStandardMaterial({
-      color,
-      emissive: color,
-      emissiveIntensity: 0.6,
-      transparent: true,
-      opacity: 0.9,
-    });
-    const box = new THREE.Mesh(boxGeo, boxMat);
-    box.position.y = 0.5;
-    group.add(box);
+    // Use actual weapon mesh construction
+    const gunGroup = createWeaponMesh(weapon, true);
+    gunGroup.position.y = 0.5;
+    group.add(gunGroup);
 
-    // Base ring glow
-    const ringGeo = new THREE.TorusGeometry(0.3, 0.03, 8, 24);
+    // Add a pulsing holographic "aura" sphere
+    const auraGeo = new THREE.SphereGeometry(0.4, 16, 16);
+    const auraMat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.15,
+      blending: THREE.AdditiveBlending
+    });
+    const aura = new THREE.Mesh(auraGeo, auraMat);
+    gunGroup.add(aura);
+
+    gunGroup.position.y = 0.5;
+    group.add(gunGroup);
+
+    // Base ring glow - wider and brighter
+    const ringGeo = new THREE.TorusGeometry(0.5, 0.04, 8, 32);
     const ringMat = new THREE.MeshBasicMaterial({
       color,
       transparent: true,
-      opacity: 0.4,
+      opacity: 0.6,
+      blending: THREE.AdditiveBlending
     });
     const ring = new THREE.Mesh(ringGeo, ringMat);
     ring.rotation.x = -Math.PI / 2;
     group.add(ring);
 
-    // Vertical light beam
-    const beamGeo = new THREE.CylinderGeometry(0.02, 0.02, 1.5, 6);
+    // Vertical light beam - more prominent
+    const beamGeo = new THREE.CylinderGeometry(0.05, 0.05, 2.5, 8);
     const beamMat = new THREE.MeshBasicMaterial({
       color,
       transparent: true,
-      opacity: 0.15,
+      opacity: 0.25,
+      blending: THREE.AdditiveBlending
     });
     const beam = new THREE.Mesh(beamGeo, beamMat);
-    beam.position.y = 0.75;
+    beam.position.y = 1.25;
     group.add(beam);
 
     group.position.copy(position);
@@ -673,104 +812,129 @@ export class Game {
     pickup.mesh = newPickup.mesh;
   }
 
-  private updateWeaponPickups(delta: number) {
+  private updateInteractions(delta: number) {
     if (!this.player) return;
 
     const time = performance.now() * 0.001;
-    let nearestPickup: WeaponPickup | null = null;
-    let nearestDist = Infinity;
+    const playerPos = this.player.group.position;
 
+    let nearestWeapon: WeaponPickup | null = null;
+    let nearestWeaponDist = Infinity;
     for (const pickup of this.weaponPickups) {
-      // Cooldown
       if (pickup.cooldown > 0) {
         pickup.cooldown -= delta;
         pickup.mesh.visible = pickup.cooldown <= 0;
         if (pickup.cooldown > 0) continue;
       }
-
-      // Animate: rotate + bob
       pickup.mesh.rotation.y += 1.5 * delta;
       pickup.mesh.position.y = pickup.baseY + Math.sin(time * 2) * 0.1;
-
-      // Distance check
-      const dist = this.player.group.position.distanceTo(pickup.position);
-
-      // Track nearest for prompt
-      if (dist < this.PICKUP_PROMPT_RANGE && dist < nearestDist) {
-        nearestDist = dist;
-        nearestPickup = pickup;
+      const dist = playerPos.distanceTo(pickup.position);
+      if (dist < this.PICKUP_PROMPT_RANGE && dist < nearestWeaponDist) {
+        nearestWeaponDist = dist;
+        nearestWeapon = pickup;
       }
     }
 
-    const canHoldPickup = !!nearestPickup &&
-      nearestDist < this.PICKUP_RANGE &&
-      this.player.isInteractHeld() &&
-      !this.player.isInteractConsumed();
-
-    if (canHoldPickup && nearestPickup) {
-      const pickup = nearestPickup;
-
-      if (this.activePickupHold !== pickup) {
-        this.activePickupHold = pickup;
-        this.activePickupHoldTime = 0;
+    let nearestAtt: AttachmentPickup | null = null;
+    let nearestAttDist = Infinity;
+    for (const pickup of this.attachmentPickups) {
+      if (pickup.cooldown > 0) {
+        pickup.cooldown -= delta;
+        pickup.mesh.visible = pickup.cooldown <= 0;
+        continue;
       }
+      pickup.mesh.rotation.y += 3.0 * delta;
+      pickup.mesh.position.y = pickup.baseY + Math.sin(time * 4) * 0.05;
+      const dist = playerPos.distanceTo(pickup.position);
+      if (dist < this.PICKUP_PROMPT_RANGE && dist < nearestAttDist) {
+        nearestAttDist = dist;
+        nearestAtt = pickup;
+      }
+    }
 
-      this.activePickupHoldTime = Math.min(this.PICKUP_HOLD_TIME, this.activePickupHoldTime + delta);
+    let canEmbark = false;
+    let titanDist = Infinity;
+    if (this.titan && this.titan.state === TitanState.READY) {
+      titanDist = playerPos.distanceTo(this.titan.group.position);
+      canEmbark = titanDist <= 3;
+    }
 
-      if (this.activePickupHoldTime >= this.PICKUP_HOLD_TIME) {
-        const dropped = this.player.tryPickupWeapon(pickup.weapon);
-        if (dropped) {
-          pickup.weapon = dropped;
-          this.rebuildPickupMesh(pickup);
-          pickup.cooldown = 0.5;
-          pickup.mesh.visible = false;
-          this.player.consumeInteractHold();
-          nearestPickup = null;
+    // Prioritization: Titan > Weapon > Attachment
+    let bestAction: 'titan' | 'weapon' | 'attachment' | null = null;
+    if (canEmbark) {
+      bestAction = 'titan';
+    } else if (nearestWeapon && nearestWeaponDist < this.PICKUP_RANGE) {
+      bestAction = 'weapon';
+    } else if (nearestAtt && nearestAttDist < this.PICKUP_RANGE) {
+      bestAction = 'attachment';
+    }
+
+    // Interaction Logic
+    const isInteracting = !!bestAction && this.player.isInteractHeld() && !this.player.isInteractConsumed();
+
+    if (isInteracting) {
+      this.activePickupHoldTime += delta;
+      const requiredTime = (bestAction === 'titan') ? this.TITAN_EMBARK_HOLD_TIME : this.PICKUP_HOLD_TIME;
+
+      if (this.activePickupHoldTime >= requiredTime) {
+        if (bestAction === 'titan') {
+          this.embarkTitan();
+        } else if (bestAction === 'weapon' && nearestWeapon) {
+          const dropped = this.player.tryPickupWeapon(nearestWeapon.weapon);
+          if (dropped) {
+            nearestWeapon.weapon = dropped;
+            this.rebuildPickupMesh(nearestWeapon);
+            nearestWeapon.cooldown = 0.5;
+            nearestWeapon.mesh.visible = false;
+          }
+        } else if (bestAction === 'attachment' && nearestAtt) {
+          const weaponIdx = this.player['weaponManager'].getCurrentIndex();
+          this.player['weaponManager'].attach(weaponIdx, nearestAtt.attachment);
+          this.player['rebuildWeaponMesh']();
+          this.player['updateWeaponHUD']();
+          nearestAtt.mesh.visible = false;
+          nearestAtt.cooldown = 1000000;
         }
-        this.activePickupHold = null;
+        this.player.consumeInteractHold();
         this.activePickupHoldTime = 0;
       }
     } else {
-      this.activePickupHold = null;
       this.activePickupHoldTime = 0;
     }
 
-    const holdProgress = this.activePickupHold === nearestPickup && nearestPickup
-      ? this.activePickupHoldTime / this.PICKUP_HOLD_TIME
-      : 0;
+    // Update Prompts
+    if (bestAction) {
+      const progress = this.activePickupHoldTime / ((bestAction === 'titan') ? this.TITAN_EMBARK_HOLD_TIME : this.PICKUP_HOLD_TIME);
+      const interactKey = keyCodeToLabel(getBindings().embark);
+      let label = '';
+      let color = '#00ffcc';
 
-    this.updatePickupPrompt(nearestPickup, holdProgress);
+      if (bestAction === 'titan') {
+        label = `Hold [${interactKey}] to EMBARK`;
+        color = '#ff6600';
+      } else if (bestAction === 'weapon' && nearestWeapon) {
+        label = `Hold [${interactKey}] to swap ${nearestWeapon.weapon.name}`;
+        color = '#' + nearestWeapon.weapon.bulletVisuals.color.toString(16).padStart(6, '0');
+      } else if (bestAction === 'attachment' && nearestAtt) {
+        label = `Hold [${interactKey}] to equip ${nearestAtt.attachment.name}`;
+      }
+
+      this.updateInteractionPrompt(label, color, progress);
+    } else {
+      if (this.pickupPromptEl) this.pickupPromptEl.style.display = 'none';
+    }
   }
 
-  private updatePickupPrompt(pickup: WeaponPickup | null, holdProgress: number) {
-    if (!pickup) {
-      if (this.pickupPromptEl) {
-        this.pickupPromptEl.style.display = 'none';
-      }
-      return;
-    }
-
+  private updateInteractionPrompt(label: string, color: string, progress: number) {
     if (!this.pickupPromptEl) {
       this.pickupPromptEl = document.createElement('div');
-      this.pickupPromptEl.style.cssText =
-        'position:fixed;bottom:180px;left:50%;transform:translateX(-50%);' +
-        'color:#fff;font:14px monospace;z-index:100;' +
-        'background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:4px;' +
-        'text-align:center;pointer-events:none;';
+      this.pickupPromptEl.style.cssText = 'position:fixed;bottom:180px;left:50%;transform:translateX(-50%);color:#fff;font:14px monospace;z-index:100;background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:4px;text-align:center;pointer-events:none;';
       document.body.appendChild(this.pickupPromptEl);
     }
-
     this.pickupPromptEl.style.display = 'block';
-    const color = '#' + pickup.weapon.bulletVisuals.color.toString(16).padStart(6, '0');
-    const interactKey = keyCodeToLabel(getBindings().embark);
-    const progressPct = Math.round(holdProgress * 100);
-    const progressBar = `
-      <div style="margin-top:6px;width:220px;height:6px;background:rgba(255,255,255,0.15);border-radius:999px;overflow:hidden;">
-        <div style="width:${progressPct}%;height:100%;background:${color};"></div>
-      </div>
-    `;
-    this.pickupPromptEl.innerHTML =
-      `Hold [${interactKey}] / X to pick up <span style="color:${color}">${pickup.weapon.name}</span>${progressBar}`;
+    const progressPct = Math.round(progress * 100);
+    const progressBar = `<div style="margin-top:6px;width:220px;height:6px;background:rgba(255,255,255,0.15);border-radius:999px;overflow:hidden;"><div style="width:${progressPct}%;height:100%;background:${color};"></div></div>`;
+    this.pickupPromptEl.innerHTML = `${label}${progressBar}`;
   }
 
   private updateObjectives(delta: number) {

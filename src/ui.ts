@@ -40,10 +40,10 @@ export class GameUI {
   private controlsOnBack: (() => void) | null = null;
 
   init(onTogglePause: () => void, onCallTitan: () => void): void {
-    // HUD container
-    const hud = document.createElement('div');
-    hud.id = 'game-hud';
-    hud.style.cssText = `
+    // Global Visor Container
+    const visor = document.createElement('div');
+    visor.id = 'visor-container';
+    visor.style.cssText = `
       position: fixed;
       top: 0;
       left: 0;
@@ -51,65 +51,130 @@ export class GameUI {
       height: 100%;
       pointer-events: none;
       z-index: 100;
+      perspective: 1000px;
+      overflow: hidden;
+    `;
+    document.body.appendChild(visor);
+
+    // Visor Overlay (Scanlines + Vignette)
+    const visorOverlay = document.createElement('div');
+    visorOverlay.style.cssText = `
+      position: absolute;
+      inset: 0;
+      background: 
+        radial-gradient(circle at center, transparent 50%, rgba(0, 20, 20, 0.4) 100%),
+        repeating-linear-gradient(rgba(0, 255, 204, 0.03) 0, rgba(0, 255, 204, 0.03) 1px, transparent 1px, transparent 4px);
+      pointer-events: none;
+      z-index: 10;
+    `;
+    visor.appendChild(visorOverlay);
+
+    // HUD Content Wrapper (The curved part)
+    const hud = document.createElement('div');
+    hud.id = 'game-hud';
+    hud.style.cssText = `
+      position: absolute;
+      inset: 5%;
       color: #00ffcc;
       font-family: 'Orbitron', sans-serif;
+      transform-style: preserve-3d;
     `;
-    document.body.appendChild(hud);
+    visor.appendChild(hud);
+
+    // Left elements (Curved Left)
+    const hudLeft = document.createElement('div');
+    hudLeft.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 300px;
+      transform: rotateY(15deg);
+      transform-origin: left center;
+    `;
+    hud.appendChild(hudLeft);
+
+    // Right elements (Curved Right)
+    const hudRight = document.createElement('div');
+    hudRight.style.cssText = `
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 300px;
+      transform: rotateY(-15deg);
+      transform-origin: right center;
+    `;
+    hud.appendChild(hudRight);
+
+    // Top elements (Center)
+    const hudTop = document.createElement('div');
+    hudTop.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%) rotateX(-10deg);
+      transform-origin: center top;
+      text-align: center;
+    `;
+    hud.appendChild(hudTop);
 
     // Level info
     const levelInfo = document.createElement('div');
     levelInfo.id = 'level-info';
     levelInfo.style.cssText = `
-      position: absolute;
-      top: 20px;
-      left: 20px;
+      margin-bottom: 10px;
       font-size: 16px;
-      text-shadow: 0 0 5px #00ffcc;
-      background: rgba(0, 0, 0, 0.5);
-      padding: 10px;
-      border-radius: 5px;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 10px rgba(0, 0, 0, 0.8);
+      background: linear-gradient(90deg, rgba(0, 255, 204, 0.1), transparent);
+      padding: 8px 15px;
+      border-left: 3px solid #00ffcc;
+      clip-path: polygon(0 0, 100% 0, 90% 100%, 0% 100%);
     `;
-    hud.appendChild(levelInfo);
+    hudLeft.appendChild(levelInfo);
     this.hudElements['level-info'] = levelInfo;
 
     // Score
     const scoreDisplay = document.createElement('div');
     scoreDisplay.id = 'score-display';
     scoreDisplay.style.cssText = `
-      position: absolute;
-      top: 60px;
-      left: 20px;
-      font-size: 16px;
-      text-shadow: 0 0 5px #00ffcc;
+      margin-top: 5px;
+      margin-left: 15px;
+      font-size: 18px;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 8px rgba(0, 0, 0, 0.8);
+      letter-spacing: 2px;
     `;
-    hud.appendChild(scoreDisplay);
+    hudLeft.appendChild(scoreDisplay);
     this.hudElements['score'] = scoreDisplay;
 
     // Objective
     const objectiveDisplay = document.createElement('div');
     objectiveDisplay.id = 'objective-display';
     objectiveDisplay.style.cssText = `
-      position: absolute;
-      top: 100px;
-      left: 20px;
-      font-size: 14px;
-      text-shadow: 0 0 5px #00ffcc;
-      max-width: 300px;
+      margin-top: 20px;
+      margin-left: 15px;
+      font-size: 13px;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 8px rgba(0, 0, 0, 0.8);
+      max-width: 250px;
+      opacity: 0.8;
+      border-bottom: 1px solid rgba(0, 255, 204, 0.3);
+      padding-bottom: 5px;
     `;
-    hud.appendChild(objectiveDisplay);
+    hudLeft.appendChild(objectiveDisplay);
     this.hudElements['objective'] = objectiveDisplay;
 
     // Timer
     const timerDisplay = document.createElement('div');
     timerDisplay.id = 'timer-display';
     timerDisplay.style.cssText = `
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      font-size: 16px;
-      text-shadow: 0 0 5px #00ffcc;
+      font-size: 20px;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 12px rgba(0, 0, 0, 0.9);
+      background: rgba(0, 0, 0, 0.4);
+      padding: 10px 30px;
+      border-bottom: 2px solid #00ffcc;
+      clip-path: polygon(10% 0, 90% 0, 100% 100%, 0% 100%);
     `;
-    hud.appendChild(timerDisplay);
+    hudTop.appendChild(timerDisplay);
     this.hudElements['timer'] = timerDisplay;
 
     // Stats
@@ -117,12 +182,15 @@ export class GameUI {
     statsDisplay.id = 'stats-display';
     statsDisplay.style.cssText = `
       position: absolute;
-      bottom: 80px;
-      left: 20px;
+      bottom: 100px;
+      left: 0;
       font-size: 14px;
-      text-shadow: 0 0 5px #00ffcc;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 8px rgba(0, 0, 0, 0.8);
+      background: rgba(0, 40, 40, 0.3);
+      padding: 10px;
+      border-left: 2px solid #00ffcc;
     `;
-    hud.appendChild(statsDisplay);
+    hudLeft.appendChild(statsDisplay);
     this.hudElements['stats'] = statsDisplay;
 
     // Health bar container
@@ -131,39 +199,39 @@ export class GameUI {
     healthContainer.style.cssText = `
       position: absolute;
       bottom: 20px;
-      left: 20px;
-      width: 200px;
-      height: 24px;
-      background: rgba(0, 0, 0, 0.7);
-      border: 2px solid #00ffcc;
-      border-radius: 4px;
-      padding: 3px;
+      left: 0;
+      width: 240px;
+      height: 30px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(0, 255, 204, 0.5);
+      clip-path: polygon(0 0, 100% 0, 95% 100%, 0% 100%);
+      padding: 4px;
     `;
-    hud.appendChild(healthContainer);
+    hudLeft.appendChild(healthContainer);
 
     const healthBar = document.createElement('div');
     healthBar.id = 'health-bar';
     healthBar.style.cssText = `
       width: 100%;
       height: 100%;
-      background: linear-gradient(90deg, #ff0000, #ff6600);
-      border-radius: 2px;
-      transition: width 0.2s;
+      background: linear-gradient(90deg, #00ffcc, #008866);
+      box-shadow: 0 0 15px rgba(0, 255, 204, 0.4);
+      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     `;
     healthContainer.appendChild(healthBar);
 
     const healthLabel = document.createElement('div');
-    healthLabel.id = 'health-label';
     healthLabel.style.cssText = `
       position: absolute;
-      bottom: 45px;
-      left: 20px;
-      font-size: 12px;
+      bottom: 55px;
+      left: 5px;
+      font-size: 11px;
       color: #00ffcc;
-      text-shadow: 0 0 5px #00ffcc;
+      letter-spacing: 1px;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 8px #000;
     `;
-    healthLabel.textContent = 'HEALTH';
-    hud.appendChild(healthLabel);
+    healthLabel.textContent = 'VITALS // SYSTEM STABLE';
+    hudLeft.appendChild(healthLabel);
 
     // Titan meter container
     const titanContainer = document.createElement('div');
@@ -171,29 +239,24 @@ export class GameUI {
     titanContainer.style.cssText = `
       position: absolute;
       bottom: 20px;
-      right: 20px;
-      width: 200px;
-      height: 24px;
-      background: rgba(0, 0, 0, 0.7);
-      border: 2px solid #ff6600;
-      border-radius: 4px;
-      padding: 3px;
-      z-index: 1000;
-      visibility: visible !important;
-      display: block !important;
+      right: 0;
+      width: 240px;
+      height: 30px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(255, 102, 0, 0.5);
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 5% 100%);
+      padding: 4px;
     `;
-    hud.appendChild(titanContainer);
-    console.log('Titan meter created and appended to HUD');
+    hudRight.appendChild(titanContainer);
 
     const titanBar = document.createElement('div');
     titanBar.id = 'titan-bar';
     titanBar.style.cssText = `
       width: 0%;
-      min-width: 2px;
       height: 100%;
       background: linear-gradient(90deg, #ff6600, #ffcc00);
-      border-radius: 2px;
-      transition: width 0.2s;
+      box-shadow: 0 0 15px rgba(255, 102, 0, 0.4);
+      transition: width 0.3s;
     `;
     titanContainer.appendChild(titanBar);
     this.hudElements['titanBar'] = titanBar;
@@ -202,35 +265,32 @@ export class GameUI {
     titanLabel.id = 'titan-label';
     titanLabel.style.cssText = `
       position: absolute;
-      bottom: 45px;
-      right: 20px;
-      font-size: 12px;
+      bottom: 55px;
+      right: 5px;
+      font-size: 11px;
       color: #ff6600;
-      text-shadow: 0 0 5px #ff6600;
-      z-index: 1000;
-      visibility: visible !important;
-      display: block !important;
+      letter-spacing: 1px;
+      text-align: right;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 8px #000;
     `;
-    titanLabel.textContent = 'TITAN';
-    hud.appendChild(titanLabel);
+    titanLabel.textContent = 'NEURAL LINK // SYNCING';
+    hudRight.appendChild(titanLabel);
     this.hudElements['titanLabel'] = titanLabel;
 
     const dashContainer = document.createElement('div');
     dashContainer.id = 'titan-dash-container';
     dashContainer.style.cssText = `
       position: absolute;
-      bottom: 60px;
-      right: 20px;
-      width: 200px;
-      height: 12px;
-      background: rgba(0, 0, 0, 0.7);
-      border: 1px solid #66ccff;
-      border-radius: 4px;
+      bottom: 65px;
+      right: 0;
+      width: 180px;
+      height: 10px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(102, 204, 255, 0.4);
       padding: 2px;
-      z-index: 1000;
       display: none;
     `;
-    hud.appendChild(dashContainer);
+    hudRight.appendChild(dashContainer);
     this.hudElements['titanDashContainer'] = dashContainer;
 
     const dashBar = document.createElement('div');
@@ -238,9 +298,8 @@ export class GameUI {
     dashBar.style.cssText = `
       width: 100%;
       height: 100%;
-      background: linear-gradient(90deg, #3399ff, #66ffff);
-      border-radius: 2px;
-      transition: width 0.08s linear;
+      background: #66ccff;
+      transition: width 0.1s linear;
     `;
     dashContainer.appendChild(dashBar);
     this.hudElements['titanDashBar'] = dashBar;
@@ -249,16 +308,15 @@ export class GameUI {
     dashLabel.id = 'titan-dash-label';
     dashLabel.style.cssText = `
       position: absolute;
-      bottom: 76px;
-      right: 20px;
-      font-size: 11px;
+      bottom: 80px;
+      right: 0;
+      font-size: 10px;
       color: #66ccff;
-      text-shadow: 0 0 4px #66ccff;
-      z-index: 1000;
       display: none;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 8px #000;
     `;
-    dashLabel.textContent = 'DASH [SHIFT / A]';
-    hud.appendChild(dashLabel);
+    dashLabel.textContent = 'DASH SYSTEMS';
+    hudRight.appendChild(dashLabel);
     this.hudElements['titanDashLabel'] = dashLabel;
 
     const sniperScope = document.createElement('div');
@@ -325,7 +383,7 @@ export class GameUI {
       transform: translate(-50%, -50%);
       font-size: 24px;
       color: #00ffcc;
-      text-shadow: 0 0 10px #00ffcc;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 12px rgba(0, 0, 0, 0.9);
       background: rgba(0, 0, 0, 0.8);
       padding: 20px 40px;
       border: 2px solid #00ffcc;
@@ -341,31 +399,22 @@ export class GameUI {
     // Pause overlay
     const pauseOverlay = document.createElement('div');
     pauseOverlay.id = 'pause-overlay';
-    pauseOverlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.7);
-      display: none;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      z-index: 200;
-      color: #00ffcc;
-      font-size: 24px;
-    `;
+    pauseOverlay.className = 'menu-overlay';
+    pauseOverlay.style.display = 'none';
     pauseOverlay.innerHTML = `
-      <div>PAUSED</div>
-      <div style="margin-top: 20px; font-size: 16px; display: flex; flex-direction: column; gap: 10px;">
-        <button id="pause-resume-btn" class="menu-button" style="padding: 10px 30px; font-size: 16px; background: #00ffcc; color: #000; border: none; border-radius: 5px; cursor: pointer;">Resume</button>
-        <button id="pause-restart-btn" class="menu-button" style="padding: 10px 30px; font-size: 16px; background: #00ffcc; color: #000; border: none; border-radius: 5px; cursor: pointer;">Restart</button>
-        <button id="pause-controls-btn" class="menu-button" style="padding: 10px 30px; font-size: 16px; background: #00ffcc; color: #000; border: none; border-radius: 5px; cursor: pointer;">Controls</button>
-        <button id="pause-menu-btn" class="menu-button" style="padding: 10px 30px; font-size: 16px; background: #00ffcc; color: #000; border: none; border-radius: 5px; cursor: pointer;">Main Menu</button>
-      </div>
-      <div style="margin-top: 15px; font-size: 12px; opacity: 0.7;">
-        D-pad: Navigate | A: Select | B: Back
+      <div class="scanline"></div>
+      <div class="menu-content">
+        <h1>PAUSED</h1>
+        <div class="menu-subtitle">System Status: Suspended // Neural Link Standby</div>
+        <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 10px;">
+          <button id="pause-resume-btn" class="menu-button">Resume Mission</button>
+          <button id="pause-restart-btn" class="menu-button">Restart Session</button>
+          <button id="pause-controls-btn" class="menu-button">Configurations</button>
+          <button id="pause-menu-btn" class="menu-button">Abort to Hub</button>
+        </div>
+        <div style="margin-top: 20px; font-size: 12px; opacity: 0.5; color: #00ffcc; letter-spacing: 1px;">
+          DPAD: NAVIGATE | A: SELECT | B: BACK
+        </div>
       </div>
     `;
     document.body.appendChild(pauseOverlay);
@@ -374,28 +423,19 @@ export class GameUI {
     // Level complete overlay
     const levelCompleteOverlay = document.createElement('div');
     levelCompleteOverlay.id = 'level-complete-overlay';
-    levelCompleteOverlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.8);
-      display: none;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      z-index: 200;
-      color: #00ffcc;
-      text-align: center;
-    `;
+    levelCompleteOverlay.className = 'menu-overlay';
+    levelCompleteOverlay.style.display = 'none';
     levelCompleteOverlay.innerHTML = `
-      <h1 style="font-size: 48px; margin-bottom: 20px;">LEVEL COMPLETE</h1>
-      <div id="level-stats" style="font-size: 18px; margin-bottom: 30px;"></div>
-      <div style="display: flex; gap: 20px;">
-        <button id="next-level-btn" style="padding: 10px 30px; font-size: 16px; background: #00ffcc; color: #000; border: none; border-radius: 5px; cursor: pointer;">Next Level</button>
-        <button id="restart-level-btn" style="padding: 10px 30px; font-size: 16px; background: #00ffcc; color: #000; border: none; border-radius: 5px; cursor: pointer;">Restart</button>
-        <button id="menu-level-btn" style="padding: 10px 30px; font-size: 16px; background: #00ffcc; color: #000; border: none; border-radius: 5px; cursor: pointer;">Main Menu</button>
+      <div class="scanline"></div>
+      <div class="menu-content">
+        <h1>MISSION COMPLETE</h1>
+        <div class="menu-subtitle">Objectives Secured // Performance Analysis</div>
+        <div id="level-stats" style="font-size: 18px; margin: 30px 0; color: #00ffcc; line-height: 1.6; letter-spacing: 1px; text-transform: uppercase;"></div>
+        <div style="display: flex; gap: 20px; justify-content: center;">
+          <button id="next-level-btn" class="menu-button" style="width: 200px;">Next Mission</button>
+          <button id="restart-level-btn" class="menu-button" style="width: 200px;">Re-run</button>
+          <button id="menu-level-btn" class="menu-button" style="width: 200px;">Return</button>
+        </div>
       </div>
     `;
     document.body.appendChild(levelCompleteOverlay);
@@ -404,27 +444,19 @@ export class GameUI {
     // Game over overlay
     const gameOverOverlay = document.createElement('div');
     gameOverOverlay.id = 'game-over-overlay';
-    gameOverOverlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.8);
-      display: none;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      z-index: 200;
-      color: #ff0000;
-      text-align: center;
-    `;
+    gameOverOverlay.className = 'menu-overlay';
+    gameOverOverlay.style.display = 'none';
+    gameOverOverlay.style.color = '#ff4444'; // Overriding the default cyan
     gameOverOverlay.innerHTML = `
-      <h1 style="font-size: 48px; margin-bottom: 20px;">GAME OVER</h1>
-      <div id="final-stats" style="font-size: 18px; margin-bottom: 30px;"></div>
-      <div style="display: flex; gap: 20px;">
-        <button id="retry-btn" style="padding: 10px 30px; font-size: 16px; background: #ff0000; color: #fff; border: none; border-radius: 5px; cursor: pointer;">Retry</button>
-        <button id="menu-gameover-btn" style="padding: 10px 30px; font-size: 16px; background: #00ffcc; color: #000; border: none; border-radius: 5px; cursor: pointer;">Main Menu</button>
+      <div class="scanline"></div>
+      <div class="menu-content" style="border-color: rgba(255, 68, 68, 0.5); box-shadow: 0 0 40px rgba(255, 0, 0, 0.2);">
+        <h1 style="color: #ff4444; text-shadow: 0 0 20px rgba(255, 68, 68, 0.7);">PILOT DOWN</h1>
+        <div class="menu-subtitle" style="color: #ff4444;">Neural Link Severed // Mission Failed</div>
+        <div id="final-stats" style="font-size: 18px; margin: 30px 0; color: #ff4444; line-height: 1.6; letter-spacing: 1px; text-transform: uppercase;"></div>
+        <div style="display: flex; gap: 20px; justify-content: center;">
+          <button id="retry-btn" class="menu-button" style="width: 200px; color: #ff4444; border-color: rgba(255, 68, 68, 0.5);">Retry</button>
+          <button id="menu-gameover-btn" class="menu-button" style="width: 200px;">Return</button>
+        </div>
       </div>
     `;
     document.body.appendChild(gameOverOverlay);
@@ -548,12 +580,13 @@ export class GameUI {
       menu.id = 'main-menu';
       menu.className = 'menu-overlay';
       menu.innerHTML = `
+        <div class="scanline"></div>
         <div class="menu-content">
           <h1>TITANFALL 3JS</h1>
-          <p style="margin-bottom: 30px; opacity: 0.8;">Advanced Movement FPS</p>
-          <button id="start-game-btn" class="menu-button">Start Game</button>
-          <button id="level-select-btn" class="menu-button">Level Select</button>
-          <button id="controls-btn" class="menu-button">Controls</button>
+          <div class="menu-subtitle">System: Advanced Movement FPS // Neural Link Active</div>
+          <button id="start-game-btn" class="menu-button">Start Mission</button>
+          <button id="level-select-btn" class="menu-button">Select Area</button>
+          <button id="controls-btn" class="menu-button">Configurations</button>
         </div>
       `;
       document.body.appendChild(menu);
@@ -572,7 +605,15 @@ export class GameUI {
       levelSelect = document.createElement('div');
       levelSelect.id = 'level-select';
       levelSelect.className = 'menu-overlay hidden';
-      levelSelect.innerHTML = `<div class="menu-content"><h1>LEVEL SELECT</h1><div id="level-list"></div><button id="back-to-menu-btn" class="menu-button">Back</button></div>`;
+      levelSelect.innerHTML = `
+        <div class="scanline"></div>
+        <div class="menu-content">
+          <h1>AREA SELECTION</h1>
+          <div class="menu-subtitle">Operational Theaters // Choose Drop Point</div>
+          <div id="level-list"></div>
+          <button id="back-to-menu-btn" class="menu-button" style="margin-top: 20px;">Return to Hub</button>
+        </div>
+      `;
       document.body.appendChild(levelSelect);
 
       const levelList = document.getElementById('level-list');
@@ -781,11 +822,9 @@ export class GameUI {
   private updateMenuFocus(): void {
     this.menuButtons.forEach((btn, index) => {
       if (index === this.menuFocusIndex) {
-        btn.style.outline = '3px solid #00ffcc';
-        btn.style.boxShadow = '0 0 15px #00ffcc';
+        btn.classList.add('focused');
       } else {
-        btn.style.outline = 'none';
-        btn.style.boxShadow = 'none';
+        btn.classList.remove('focused');
       }
     });
   }
@@ -799,14 +838,22 @@ export class GameUI {
     overlay.id = 'controls-overlay';
     overlay.className = 'menu-overlay hidden';
     overlay.innerHTML = `
-      <div class="menu-content" style="max-width:480px;width:90%;max-height:85vh;overflow-y:auto;">
-        <h1>CONTROLS</h1>
-        <div id="controls-list" style="margin:16px 0;display:flex;flex-direction:column;gap:8px;"></div>
-        <div style="display:flex;gap:12px;justify-content:center;margin-top:8px;">
-          <button id="controls-reset-btn" class="menu-button" style="width:auto;padding:10px 20px;font-size:14px;">Reset Defaults</button>
-          <button id="controls-back-btn" class="menu-button" style="width:auto;padding:10px 20px;font-size:14px;">Back</button>
+      <div class="scanline"></div>
+      <div class="menu-content" style="max-width:650px;width:95%;max-height:85vh;padding: 30px; display: flex; flex-direction: column; overflow: hidden;">
+        <div style="flex-shrink: 0; margin-bottom: 10px;">
+          <h1 style="font-size:40px;">CONFIGURATIONS</h1>
+          <div class="menu-subtitle">Neural Link Mapping // Input Calibration</div>
         </div>
-        <div style="margin-top:12px;font-size:11px;opacity:0.6;">Click a key to rebind | ESC cancels</div>
+
+        <div id="controls-list" style="overflow-y: auto; padding-right: 15px; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; flex-grow: 1; min-height: 0;"></div>
+        
+        <div style="flex-shrink: 0; display: flex; flex-direction: column; align-items: center;">
+          <div style="display: flex; gap: 15px; justify-content: center; margin-top: 15px;">
+            <button id="controls-reset-btn" class="menu-button" style="width:auto;padding:12px 25px;font-size:13px;margin:0;">Factory Reset</button>
+            <button id="controls-back-btn" class="menu-button" style="width:auto;padding:12px 25px;font-size:13px;margin:0;">Save & Exit</button>
+          </div>
+          <div style="margin-top: 15px; font-size: 11px; opacity: 0.5; letter-spacing: 1px; color: #00ffcc;">[ CLICK KEY TO REBIND | ESC TO CANCEL ]</div>
+        </div>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -830,25 +877,25 @@ export class GameUI {
     const b = getBindings();
     for (const action of Object.keys(ACTION_LABELS) as (keyof Bindings)[]) {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;';
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:15px;padding: 5px 0;border-bottom: 1px solid rgba(0,255,204,0.1);';
 
       const label = document.createElement('span');
       label.textContent = ACTION_LABELS[action];
-      label.style.cssText = 'font-size:14px;color:#00ffcc;min-width:160px;text-align:left;flex-shrink:0;';
+      label.style.cssText = 'font-size:15px;color:#00ffcc;min-width:180px;text-align:left;flex-shrink:0;letter-spacing:1px;';
 
       const bindingsContainer = document.createElement('div');
-      bindingsContainer.style.cssText = 'display:flex;gap:8px;flex-shrink:0;';
+      bindingsContainer.style.cssText = 'display:flex;gap:10px;flex-shrink:0;';
 
       // Keyboard binding button
       const keyBtn = document.createElement('button');
       keyBtn.className = 'menu-button';
-      keyBtn.style.cssText = 'width:100px;margin:0;padding:8px;font-size:13px;font-family:monospace;';
-      keyBtn.textContent = `[ ${keyCodeToLabel(b[action])} ]`;
+      keyBtn.style.cssText = 'width:120px;margin:0;padding:8px;font-size:13px;font-family:monospace;clip-path: polygon(5% 0, 100% 0, 100% 70%, 95% 100%, 0 100%, 0 30%);';
+      keyBtn.textContent = keyCodeToLabel(b[action]);
       keyBtn.onclick = () => this.startRebinding(action, keyBtn);
 
       // Controller binding display
       const controllerLabel = document.createElement('div');
-      controllerLabel.style.cssText = 'width:80px;margin:0;padding:8px;font-size:12px;font-family:monospace;background:rgba(0,0,0,0.5);border:1px solid #666;border-radius:4px;color:#888;text-align:center;';
+      controllerLabel.style.cssText = 'width:90px;margin:0;padding:8px;font-size:12px;font-family:monospace;background:rgba(0,255,204,0.05);border:1px solid rgba(0,255,204,0.2);border-radius:2px;color:#00ffcc;text-align:center;opacity:0.6;';
       controllerLabel.textContent = this.getControllerLabel(action);
 
       this.controlsRowButtons.set(action, keyBtn);
@@ -861,21 +908,21 @@ export class GameUI {
 
     // Aim curve selector (gamepad only)
     const curveRow = document.createElement('div');
-    curveRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid #333;';
+    curveRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:15px;margin-top:20px;padding-top:20px;border-top: 1px solid rgba(0,255,204,0.3);';
 
     const curveLabel = document.createElement('span');
     curveLabel.textContent = 'Aim Response Curve';
-    curveLabel.style.cssText = 'font-size:14px;color:#ff6600;min-width:160px;text-align:left;flex-shrink:0;';
+    curveLabel.style.cssText = 'font-size:15px;color:#00ffcc;min-width:180px;text-align:left;flex-shrink:0;letter-spacing:1px;';
 
     const curveSelect = document.createElement('div');
-    curveSelect.style.cssText = 'display:flex;gap:4px;flex-shrink:0;';
+    curveSelect.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
 
     const currentCurve = getAimCurve();
     for (const key of Object.keys(AIM_CURVE_LABELS) as AimCurve[]) {
       const btn = document.createElement('button');
       btn.className = 'menu-button';
       const isActive = key === currentCurve;
-      btn.style.cssText = `width:auto;margin:0;padding:6px 10px;font-size:12px;${isActive ? 'background:#00ffcc;color:#000;' : 'background:#222;color:#888;border:1px solid #444;'}`;
+      btn.style.cssText = `width:auto;margin:0;padding:8px 12px;font-size:12px;clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);${isActive ? 'background:rgba(0,255,204,0.3);color:#fff;border-color:#00ffcc;' : 'background:rgba(0,0,0,0.3);color:#888;border:1px solid rgba(0,255,204,0.1);'}`;
       btn.textContent = AIM_CURVE_LABELS[key];
       btn.onclick = () => {
         setAimCurve(key);
@@ -971,7 +1018,7 @@ showPilotingIndicator(show: boolean): void {
         transform: translateX(-50%);
         font-size: 32px;
         color: #00ffcc;
-        text-shadow: 0 0 20px #00ffcc;
+        text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 20px rgba(0, 0, 0, 1);
         background: rgba(0, 0, 0, 0.8);
         padding: 20px 40px;
         border: 3px solid #00ffcc;

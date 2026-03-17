@@ -957,6 +957,7 @@ export class Player {
     const startPos = this.camera.position.clone().add(handOffset);
     this.grappleProjectile = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), new THREE.MeshBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.9 }));
     this.grappleProjectile.position.copy(startPos);
+    this.grappleProjectile.userData.ignoreRaycast = true;
     this.grappleProjectileVelocity = hits[0].point.clone().sub(startPos).normalize().multiplyScalar(this.GRAPPLE_PROJECTILE_SPEED);
     this.grappleProjectileActive = true;
     const ropeGeo = new THREE.BufferGeometry(); ropeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
@@ -1046,7 +1047,7 @@ export class Player {
     const throwDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion); throwDir.y += 0.3; throwDir.normalize();
     const startPos = this.camera.position.clone().add(new THREE.Vector3(0.2, -0.15, -0.3).applyQuaternion(this.camera.quaternion));
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), new THREE.MeshStandardMaterial({ color: 0x44ff44, emissive: 0x44ff44, emissiveIntensity: 2 }));
-    mesh.position.copy(startPos); this.scene.add(mesh);
+    mesh.position.copy(startPos); mesh.userData.ignoreRaycast = true; this.scene.add(mesh);
     const trailGeo = new THREE.BufferGeometry(); trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(60 * 3), 3)); trailGeo.setDrawRange(0, 0);
     const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0x44ff44, transparent: true, opacity: 0.6 }));
     this.scene.add(trail); this.grenades.push({ mesh, velocity: throwDir.multiplyScalar(20), fuseTime: 2.0, bouncesLeft: 3, trail, trailPositions: [startPos.clone()] });

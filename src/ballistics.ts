@@ -34,6 +34,7 @@ export class BallisticsSystem {
     const mat = new THREE.MeshBasicMaterial({ color: visuals.color });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(startPos);
+    mesh.userData.ignoreRaycast = true;
 
     // Orient bullet along velocity
     if (velocity.length() > 0.1) {
@@ -64,6 +65,7 @@ export class BallisticsSystem {
         depthWrite: false,
       });
       trail = new THREE.Mesh(trailGeo, trailMat);
+      trail.userData.ignoreRaycast = true;
       this.scene.add(trail);
     }
 

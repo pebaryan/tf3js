@@ -158,7 +158,17 @@ export class MovementSystem {
   /* ------------------------------------------------------------------ */
 
   private getMeshes(): THREE.Mesh[] {
-    return this.scene.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh);
+    return this.scene.children.filter((o): o is THREE.Mesh => {
+      if (!(o instanceof THREE.Mesh)) return false;
+      if (o.userData.ignoreRaycast) return false;
+      const material = o.material;
+      if (Array.isArray(material)) {
+        if (material.some((m) => m.transparent)) return false;
+      } else if (material.transparent) {
+        return false;
+      }
+      return true;
+    });
   }
 
   private checkGrounded(): boolean {

@@ -291,6 +291,7 @@ export class ImpactEffectsRenderer {
     const flash = new THREE.Mesh(flashGeo, flashMat);
     flash.position.copy(point).add(n.clone().multiplyScalar(config.flashNormalOffset));
     flash.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    flash.userData.ignoreRaycast = true;
     this.scene.add(flash);
     this.flashes.push({ mesh: flash, life: config.flashLife, maxLife: config.flashLife });
 
@@ -309,6 +310,7 @@ export class ImpactEffectsRenderer {
       });
       const spark = new THREE.Mesh(sparkGeo, sparkMat);
       spark.position.copy(point);
+      spark.userData.ignoreRaycast = true;
 
       const rand = new THREE.Vector3(
         (Math.random() - 0.5) * 1.6,
@@ -383,6 +385,7 @@ export class ImpactEffectsRenderer {
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(position).add(direction.clone().multiplyScalar(0.3));
+    mesh.userData.ignoreRaycast = true;
     this.scene.add(mesh);
     this.flashes.push({ mesh, life: config.life, maxLife: config.life });
   }
@@ -398,6 +401,7 @@ export class ImpactEffectsRenderer {
     });
     const core = new THREE.Mesh(coreGeo, coreMat);
     core.position.copy(position);
+    core.userData.ignoreRaycast = true;
     this.scene.add(core);
     this.flashes.push({ mesh: core, life: config.coreLife, maxLife: config.coreLife });
 
@@ -414,6 +418,7 @@ export class ImpactEffectsRenderer {
     ring.position.copy(position);
     // Random orientation for visual variety
     ring.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+    ring.userData.ignoreRaycast = true;
     this.scene.add(ring);
     this.flashes.push({ mesh: ring, life: config.shockwaveLife, maxLife: config.shockwaveLife });
 
@@ -429,6 +434,7 @@ export class ImpactEffectsRenderer {
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.copy(position);
+      mesh.userData.ignoreRaycast = true;
 
       const angle = Math.random() * Math.PI * 2;
       const elevation = (Math.random() - 0.3) * Math.PI;

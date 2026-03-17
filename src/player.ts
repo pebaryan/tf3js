@@ -32,6 +32,46 @@ interface Grenade {
   trailPositions: THREE.Vector3[];
 }
 
+interface ViewmodelSightLayout {
+  adsAnchor: THREE.Vector3;
+}
+
+const VIEWMODEL_SIGHT_LAYOUTS: Record<string, ViewmodelSightLayout> = {
+  'R-201': {
+    adsAnchor: new THREE.Vector3(0, 0.045, 0.02),
+  },
+  'EVA-8': {
+    adsAnchor: new THREE.Vector3(0, 0.05, 0.05),
+  },
+  'Kraber': {
+    adsAnchor: new THREE.Vector3(0, 0.04, -0.02),
+  },
+  'EPG-1': {
+    adsAnchor: new THREE.Vector3(0, 0.038, 0.08),
+  },
+  'Alternator': {
+    adsAnchor: new THREE.Vector3(0, 0.042, 0.04),
+  },
+  'CAR': {
+    adsAnchor: new THREE.Vector3(0, 0.05, 0.03),
+  },
+  'Flatline': {
+    adsAnchor: new THREE.Vector3(0, 0.046, 0.05),
+  },
+  'Mastiff': {
+    adsAnchor: new THREE.Vector3(0, 0.05, 0.08),
+  },
+  'Wingman': {
+    adsAnchor: new THREE.Vector3(0, 0.05, 0.01),
+  },
+  'L-STAR': {
+    adsAnchor: new THREE.Vector3(0, 0.05, 0.05),
+  },
+  'XO-16': {
+    adsAnchor: new THREE.Vector3(0, 0.065, 0.03),
+  },
+};
+
 /* ------------------------------------------------------------------ */
 /*  Weapon Mesh Construction                                         */
 /* ------------------------------------------------------------------ */
@@ -39,6 +79,7 @@ interface Grenade {
 export function createWeaponMesh(weapon: Weapon, forPickup: boolean = false): THREE.Group {
   const gun = new THREE.Group();
   const name = weapon?.name ?? 'R-201';
+  const sightLayout = VIEWMODEL_SIGHT_LAYOUTS[name];
 
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
   const accentColor = weapon?.bulletVisuals?.color ?? 0x00ffcc;
@@ -186,6 +227,10 @@ export function createWeaponMesh(weapon: Weapon, forPickup: boolean = false): TH
   const guard = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.008, 0.04), bodyMat);
   guard.position.set(0, -0.03, 0.02); gun.add(guard);
 
+  if (sightLayout) {
+    gun.userData.adsAnchor = sightLayout.adsAnchor.clone();
+  }
+
   // --- Attachments Visuals ---
   const attachments = weapon?.attachments || {};
 
@@ -204,6 +249,7 @@ export function createWeaponMesh(weapon: Weapon, forPickup: boolean = false): TH
       const dot = new THREE.Mesh(new THREE.SphereGeometry(0.003, 4, 4), new THREE.MeshBasicMaterial({ color: 0xff0000 }));
       dot.position.set(0, 0.02, -0.021);
       opticGroup.add(dot);
+      gun.userData.adsAnchor = new THREE.Vector3(0, 0.06, 0.025);
     } else if (opt.id === 'ranger') {
       const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.012, 0.1, 8), bodyMat);
       scope.rotation.x = Math.PI / 2;
@@ -211,12 +257,14 @@ export function createWeaponMesh(weapon: Weapon, forPickup: boolean = false): TH
       const lens = new THREE.Mesh(new THREE.CircleGeometry(0.012, 12), new THREE.MeshBasicMaterial({ color: 0x0088ff, transparent: true, opacity: 0.5 }));
       lens.position.z = -0.051; lens.rotation.y = Math.PI;
       opticGroup.add(lens);
+      gun.userData.adsAnchor = new THREE.Vector3(0, 0.06, -0.001);
     } else if (opt.id === 'threat') {
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.08), bodyMat);
       opticGroup.add(box);
       const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.025, 0.025), new THREE.MeshBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.6 }));
       screen.position.z = 0.041;
       opticGroup.add(screen);
+      gun.userData.adsAnchor = new THREE.Vector3(0, 0.06, 0.045);
     }
     gun.add(opticGroup);
   }
@@ -268,10 +316,11 @@ export function createWeaponMesh(weapon: Weapon, forPickup: boolean = false): TH
         transparent?: boolean;
         toneMapped?: boolean;
       };
-      material.transparent = true;
-      material.opacity = 1;
-      material.depthTest = false;
-      material.depthWrite = false;
+      const shouldStayTransparent = material.transparent === true || (material.opacity !== undefined && material.opacity < 1);
+      material.transparent = shouldStayTransparent;
+      material.opacity = material.opacity ?? 1;
+      material.depthTest = true;
+      material.depthWrite = !shouldStayTransparent;
       material.fog = false;
       material.toneMapped = false;
     });
@@ -345,6 +394,7 @@ export class Player {
   private weaponMesh: THREE.Group | null = null;
   private readonly hipfirePos = new THREE.Vector3(0.25, -0.22, -0.4);
   private readonly adsPos = new THREE.Vector3(0, -0.13, -0.35);
+  private readonly adsSightOffset = new THREE.Vector3(0, -0.012, -0.16);
   private weaponViewOffset = this.hipfirePos.clone();
   private weaponBobTime = 0;
   private weaponRecoilKick = 0;
@@ -461,6 +511,14 @@ export class Player {
     this.camera.position.copy(this.group.position);
     this.camera.position.y += 0.5;
     this.syncWeaponMeshToCamera();
+  }
+
+  private getADSViewOffset(): THREE.Vector3 {
+    const adsAnchor = this.weaponMesh?.userData.adsAnchor;
+    if (adsAnchor instanceof THREE.Vector3) {
+      return this.adsSightOffset.clone().sub(adsAnchor);
+    }
+    return this.adsPos.clone();
   }
 
   private getWeaponMuzzleLocalOffset(): THREE.Vector3 {
@@ -1030,7 +1088,7 @@ export class Player {
     this.currentFOV += (targetFOV - this.currentFOV) * 0.15; this.camera.fov = this.currentFOV; this.camera.updateProjectionMatrix();
     if (this.weaponMesh) {
       this.weaponMesh.visible = !this.shouldShowSniperScope();
-      const target = isADS ? this.adsPos.clone() : this.hipfirePos.clone(), speed = this.movement.hSpeed();
+      const target = isADS ? this.getADSViewOffset() : this.hipfirePos.clone(), speed = this.movement.hSpeed();
       if (speed > 1 && this.movement.isGrounded) { const bobFreq = isADS ? 6 : 10, bobAmpX = isADS ? 0.002 : 0.008, bobAmpY = isADS ? 0.002 : 0.006; this.weaponBobTime += speed * 0.06; target.x += Math.sin(this.weaponBobTime * bobFreq) * bobAmpX; target.y += Math.abs(Math.sin(this.weaponBobTime * bobFreq * 0.5)) * bobAmpY; }
       else this.weaponBobTime *= 0.95;
       const swayAmount = isADS ? 0.0005 : 0.002 * this.activeWeapon.accuracy, t = performance.now() * 0.001;

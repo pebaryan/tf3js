@@ -1,4 +1,4 @@
-import { GameState, GameStats } from './types';
+import { DebugHUDData, GameState, GameStats, WeaponHUDData } from './types';
 import { Level, LevelType } from './levels';
 import { Bindings, DEFAULT_BINDINGS, ACTION_LABELS, getBindings, setBindings, keyCodeToLabel, AimCurve, AIM_CURVE_LABELS, getAimCurve, setAimCurve } from './keybindings';
 
@@ -16,6 +16,8 @@ export interface HUDUpdateData {
   enemyCount: number;
   destroyedTargets: number;
   showSniperScope: boolean;
+  weapon: WeaponHUDData;
+  debug: DebugHUDData;
 }
 
 export class GameUI {
@@ -172,7 +174,7 @@ export class GameUI {
       background: rgba(0, 0, 0, 0.4);
       padding: 10px 30px;
       border-bottom: 2px solid #00ffcc;
-      clip-path: polygon(10% 0, 90% 0, 100% 100%, 0% 100%);
+      clip-path: polygon(0 0, 100% 0, 90% 100%, 10% 100%);
     `;
     hudTop.appendChild(timerDisplay);
     this.hudElements['timer'] = timerDisplay;
@@ -204,7 +206,7 @@ export class GameUI {
       height: 30px;
       background: rgba(0, 0, 0, 0.6);
       border: 1px solid rgba(0, 255, 204, 0.5);
-      clip-path: polygon(0 0, 100% 0, 95% 100%, 0% 100%);
+      clip-path: polygon(0 0, 95% 0, 99% 100%, 0 100%);
       padding: 4px;
     `;
     hudLeft.appendChild(healthContainer);
@@ -244,7 +246,7 @@ export class GameUI {
       height: 30px;
       background: rgba(0, 0, 0, 0.6);
       border: 1px solid rgba(255, 102, 0, 0.5);
-      clip-path: polygon(0 0, 100% 0, 100% 100%, 5% 100%);
+      clip-path: polygon(5% 0, 100% 0, 100% 100%, 1% 100%);
       padding: 4px;
     `;
     hudRight.appendChild(titanContainer);
@@ -319,6 +321,225 @@ export class GameUI {
     hudRight.appendChild(dashLabel);
     this.hudElements['titanDashLabel'] = dashLabel;
 
+    const debugPanel = document.createElement('div');
+    debugPanel.id = 'debug-panel';
+    debugPanel.style.cssText = `
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 240px;
+      padding: 12px 16px 12px 22px;
+      background: linear-gradient(270deg, rgba(0, 0, 0, 0.64), rgba(0, 28, 36, 0.2));
+      border-right: 2px solid rgba(102, 255, 214, 0.7);
+      border-top: 1px solid rgba(102, 255, 214, 0.25);
+      border-bottom: 1px solid rgba(102, 255, 214, 0.2);
+      clip-path: polygon(3% 0, 100% 0, 100% 100%, 15% 100%);
+      text-align: right;
+      box-shadow: 0 0 16px rgba(0, 255, 204, 0.1);
+    `;
+    hudRight.appendChild(debugPanel);
+    this.hudElements['debugPanel'] = debugPanel;
+
+    const debugLabel = document.createElement('div');
+    debugLabel.style.cssText = `
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: rgba(180, 255, 240, 0.7);
+      margin-bottom: 8px;
+    `;
+    debugLabel.textContent = 'PILOT TELEMETRY';
+    debugPanel.appendChild(debugLabel);
+
+    const debugState = document.createElement('div');
+    debugState.id = 'debug-state';
+    debugState.style.cssText = `
+      font-size: 20px;
+      letter-spacing: 1.5px;
+      color: #8affea;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 10px rgba(0, 0, 0, 0.8);
+    `;
+    debugPanel.appendChild(debugState);
+    this.hudElements['debugState'] = debugState;
+
+    const debugSpeed = document.createElement('div');
+    debugSpeed.id = 'debug-speed';
+    debugSpeed.style.cssText = `
+      margin-top: 4px;
+      font-size: 30px;
+      line-height: 1;
+      color: #f5fffd;
+    `;
+    debugPanel.appendChild(debugSpeed);
+    this.hudElements['debugSpeed'] = debugSpeed;
+
+    const debugVelocity = document.createElement('div');
+    debugVelocity.id = 'debug-velocity';
+    debugVelocity.style.cssText = `
+      margin-top: 8px;
+      font-size: 11px;
+      line-height: 1.5;
+      letter-spacing: 1px;
+      color: rgba(220, 255, 250, 0.78);
+    `;
+    debugPanel.appendChild(debugVelocity);
+    this.hudElements['debugVelocity'] = debugVelocity;
+
+    const debugFlags = document.createElement('div');
+    debugFlags.id = 'debug-flags';
+    debugFlags.style.cssText = `
+      margin-top: 8px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    `;
+    debugPanel.appendChild(debugFlags);
+    this.hudElements['debugFlags'] = debugFlags;
+
+    const weaponPanel = document.createElement('div');
+    weaponPanel.id = 'weapon-panel';
+    weaponPanel.style.cssText = `
+      position: absolute;
+      bottom: 115px;
+      right: 0;
+      width: 250px;
+      padding: 14px 18px 12px 24px;
+      background: linear-gradient(270deg, rgba(0, 0, 0, 0.68), rgba(0, 48, 40, 0.18));
+      border-right: 3px solid #00ffcc;
+      border-top: 1px solid rgba(0, 255, 204, 0.25);
+      border-bottom: 1px solid rgba(0, 255, 204, 0.25);
+      clip-path: polygon(5% 0, 100% 0, 100% 100%, 5% 100%);
+      box-shadow: 0 0 18px rgba(0, 255, 204, 0.12);
+    `;
+    hudRight.appendChild(weaponPanel);
+    this.hudElements['weaponPanel'] = weaponPanel;
+
+    const weaponLabel = document.createElement('div');
+    weaponLabel.style.cssText = `
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: rgba(180, 255, 240, 0.7);
+      margin-bottom: 6px;
+      text-align: right;
+    `;
+    weaponLabel.textContent = 'ARMAMENT STATUS';
+    weaponPanel.appendChild(weaponLabel);
+
+    const weaponName = document.createElement('div');
+    weaponName.id = 'weapon-name';
+    weaponName.style.cssText = `
+      font-size: 22px;
+      letter-spacing: 1.5px;
+      text-align: right;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 10px rgba(0, 0, 0, 0.9);
+    `;
+    weaponPanel.appendChild(weaponName);
+    this.hudElements['weaponName'] = weaponName;
+
+    const ammoRow = document.createElement('div');
+    ammoRow.style.cssText = `
+      display: flex;
+      justify-content: flex-end;
+      align-items: baseline;
+      gap: 8px;
+      margin-top: 8px;
+    `;
+    weaponPanel.appendChild(ammoRow);
+
+    const ammoCount = document.createElement('div');
+    ammoCount.id = 'ammo-count';
+    ammoCount.style.cssText = `
+      font-size: 34px;
+      line-height: 1;
+      font-weight: 700;
+      text-shadow: 0 0 14px rgba(0, 255, 204, 0.2);
+    `;
+    ammoRow.appendChild(ammoCount);
+    this.hudElements['ammoCount'] = ammoCount;
+
+    const ammoMeta = document.createElement('div');
+    ammoMeta.id = 'ammo-meta';
+    ammoMeta.style.cssText = `
+      font-size: 11px;
+      line-height: 1.4;
+      letter-spacing: 1px;
+      text-align: right;
+      color: rgba(220, 255, 250, 0.75);
+    `;
+    ammoRow.appendChild(ammoMeta);
+    this.hudElements['ammoMeta'] = ammoMeta;
+
+    const ammoBarFrame = document.createElement('div');
+    ammoBarFrame.style.cssText = `
+      width: 100%;
+      height: 8px;
+      margin-top: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(0, 255, 204, 0.2);
+      overflow: hidden;
+    `;
+    weaponPanel.appendChild(ammoBarFrame);
+
+    const ammoBar = document.createElement('div');
+    ammoBar.id = 'ammo-bar';
+    ammoBar.style.cssText = `
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #00ffcc, #8affea);
+      transition: width 0.12s linear;
+    `;
+    ammoBarFrame.appendChild(ammoBar);
+    this.hudElements['ammoBar'] = ammoBar;
+
+    const ammoPips = document.createElement('div');
+    ammoPips.id = 'ammo-pips';
+    ammoPips.style.cssText = `
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      gap: 4px;
+      margin-top: 10px;
+    `;
+    weaponPanel.appendChild(ammoPips);
+    this.hudElements['ammoPips'] = ammoPips;
+
+    const weaponSlots = document.createElement('div');
+    weaponSlots.id = 'weapon-slots';
+    weaponSlots.style.cssText = `
+      margin-top: 12px;
+      display: grid;
+      gap: 4px;
+      font-size: 11px;
+      letter-spacing: 1px;
+    `;
+    weaponPanel.appendChild(weaponSlots);
+    this.hudElements['weaponSlots'] = weaponSlots;
+
+    const weaponAttachments = document.createElement('div');
+    weaponAttachments.id = 'weapon-attachments';
+    weaponAttachments.style.cssText = `
+      margin-top: 10px;
+      font-size: 10px;
+      line-height: 1.5;
+      text-align: right;
+      color: rgba(190, 220, 220, 0.75);
+      min-height: 30px;
+    `;
+    weaponPanel.appendChild(weaponAttachments);
+    this.hudElements['weaponAttachments'] = weaponAttachments;
+
+    const utilityRow = document.createElement('div');
+    utilityRow.id = 'weapon-utility';
+    utilityRow.style.cssText = `
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(0, 255, 204, 0.18);
+      font-size: 11px;
+      line-height: 1.6;
+      text-align: right;
+    `;
+    weaponPanel.appendChild(utilityRow);
+    this.hudElements['weaponUtility'] = utilityRow;
+
     const sniperScope = document.createElement('div');
     sniperScope.id = 'sniper-scope';
     sniperScope.style.cssText = `
@@ -392,7 +613,7 @@ export class GameUI {
       z-index: 200;
       text-align: center;
     `;
-    embarkIndicator.innerHTML = 'HOLD [E] TO EMBARK<br><span style="font-size:14px;color:#888;">Or press X on controller</span>';
+    embarkIndicator.innerHTML = 'HOLD [E] TO EMBARK<br><span style="font-size:14px;color:#888;">Or hold X on controller</span>';
     hud.appendChild(embarkIndicator);
     this.hudElements['embarkIndicator'] = embarkIndicator;
 
@@ -489,7 +710,7 @@ export class GameUI {
     const { currentLevel, stats, scoreMultiplier, playerHealth,
             titanDashMeter, isPilotingTitan,
             capturePoints, capturedTime, checkpoints, checkpointProgress,
-            enemyCount, destroyedTargets, showSniperScope } = data;
+            enemyCount, destroyedTargets, showSniperScope, weapon, debug } = data;
 
     this.hudElements['level-info'].innerHTML = `
       <strong>LEVEL ${currentLevel.id}</strong><br>
@@ -541,6 +762,131 @@ export class GameUI {
       dashLabel.style.display = isPilotingTitan ? 'block' : 'none';
       dashBar.style.width = `${Math.max(0, Math.min(100, titanDashMeter))}%`;
       dashBar.style.filter = titanDashMeter < 40 ? 'saturate(1.8) brightness(1.2)' : 'none';
+    }
+
+    const debugState = this.hudElements['debugState'];
+    if (debugState) debugState.textContent = debug.movementState;
+
+    const debugSpeed = this.hudElements['debugSpeed'];
+    if (debugSpeed) debugSpeed.textContent = `${debug.speed.toFixed(1)}`;
+
+    const debugVelocity = this.hudElements['debugVelocity'];
+    if (debugVelocity) {
+      debugVelocity.innerHTML = `
+        VEL ${debug.velocity.x.toFixed(1)} / ${debug.velocity.y.toFixed(1)} / ${debug.velocity.z.toFixed(1)}<br>
+        JUMPS ${debug.jumpCount}
+      `;
+    }
+
+    const debugFlags = this.hudElements['debugFlags'];
+    if (debugFlags) {
+      const renderFlag = (label: string, active: boolean, activeColor: string) => `
+        <span style="
+          padding: 2px 7px;
+          border: 1px solid ${active ? activeColor : 'rgba(255,255,255,0.12)'};
+          color: ${active ? activeColor : 'rgba(200,230,230,0.45)'};
+          background: ${active ? `${activeColor}14` : 'rgba(255,255,255,0.03)'};
+          font-size: 10px;
+          letter-spacing: 1px;
+        ">${label}</span>
+      `;
+
+      debugFlags.innerHTML = [
+        renderFlag('SPRINT', debug.sprinting, '#66ff99'),
+        renderFlag('CROUCH', debug.crouching, '#ffaa55'),
+      ].join('');
+    }
+
+    const weaponPanel = this.hudElements['weaponPanel'];
+    if (weaponPanel) {
+      weaponPanel.style.borderRightColor = weapon.accentColor;
+      weaponPanel.style.boxShadow = `0 0 18px ${weapon.accentColor}22`;
+    }
+
+    const weaponName = this.hudElements['weaponName'];
+    if (weaponName) {
+      weaponName.textContent = weapon.weaponName;
+      weaponName.style.color = weapon.accentColor;
+    }
+
+    const ammoCount = this.hudElements['ammoCount'];
+    if (ammoCount) {
+      ammoCount.textContent = weapon.isReloading ? 'RLD' : `${weapon.ammo}`;
+      ammoCount.style.color = weapon.isReloading
+        ? '#ffaa00'
+        : weapon.ammo === 0
+          ? '#ff5555'
+          : '#f5fffd';
+    }
+
+    const ammoMeta = this.hudElements['ammoMeta'];
+    if (ammoMeta) {
+      const percent = Math.round(weapon.reloadProgress * 100);
+      ammoMeta.innerHTML = weapon.isReloading
+        ? `RELOADING<br>${percent}%`
+        : `MAG ${weapon.magazineSize}<br>LIVE ROUNDS`;
+    }
+
+    const ammoBar = this.hudElements['ammoBar'];
+    if (ammoBar) {
+      const ammoRatio = weapon.magazineSize > 0 ? weapon.ammo / weapon.magazineSize : 0;
+      ammoBar.style.width = `${Math.max(0, Math.min(100, ammoRatio * 100))}%`;
+      ammoBar.style.background = weapon.isReloading
+        ? 'linear-gradient(90deg, #ffaa00, #ffe08a)'
+        : `linear-gradient(90deg, ${weapon.accentColor}, #f5fffd)`;
+    }
+
+    const ammoPips = this.hudElements['ammoPips'];
+    if (ammoPips) {
+      const pipCount = Math.min(Math.max(weapon.magazineSize, 1), 24);
+      const filledPips = weapon.isReloading
+        ? Math.max(1, Math.round(weapon.reloadProgress * pipCount))
+        : Math.round((weapon.ammo / Math.max(weapon.magazineSize, 1)) * pipCount);
+      ammoPips.innerHTML = Array.from({ length: pipCount }, (_, index) => {
+        const active = index < filledPips;
+        const color = weapon.isReloading ? '#ffaa00' : weapon.accentColor;
+        return `<span style="
+          display:block;
+          height:6px;
+          background:${active ? color : 'rgba(255,255,255,0.08)'};
+          box-shadow:${active ? `0 0 8px ${color}66` : 'none'};
+          opacity:${active ? '1' : '0.45'};
+        "></span>`;
+      }).join('');
+    }
+
+    const weaponSlots = this.hudElements['weaponSlots'];
+    if (weaponSlots) {
+      weaponSlots.innerHTML = weapon.weaponSlots.map((slot) => `
+        <div style="
+          display:flex;
+          justify-content:space-between;
+          color:${slot.active ? weapon.accentColor : 'rgba(200, 230, 230, 0.55)'};
+          border-right:${slot.active ? `2px solid ${weapon.accentColor}` : '2px solid transparent'};
+          padding-right:8px;
+        ">
+          <span>0${slot.index + 1}</span>
+          <span>${slot.name}</span>
+        </div>
+      `).join('');
+    }
+
+    const weaponAttachments = this.hudElements['weaponAttachments'];
+    if (weaponAttachments) {
+      weaponAttachments.innerHTML = weapon.attachments.length > 0
+        ? `MODS // ${weapon.attachments.join(' // ')}`
+        : 'MODS // STOCK CONFIG';
+    }
+
+    const weaponUtility = this.hudElements['weaponUtility'];
+    if (weaponUtility) {
+      weaponUtility.innerHTML = `
+        <div style="color:${weapon.grenadeCount > 0 ? '#88cc88' : '#ff5555'};">FRAG ${weapon.grenadeCount}</div>
+        <div style="color:${weapon.grappleColor};">GRAPPLE ${weapon.grappleLabel}</div>
+        <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);margin-top:4px;">
+          <div style="width:${Math.max(0, Math.min(100, weapon.grappleProgress * 100))}%;height:100%;background:${weapon.grappleColor};transition:width 0.1s linear;"></div>
+        </div>
+      `;
     }
 
     let statsText = '';
@@ -947,7 +1293,7 @@ export class GameUI {
       'crouch': 'RB',
       'fire': 'RT',
       'callTitan': 'D-Pad↓',
-      'embark': 'X / Hold X',
+      'embark': 'Hold X',
       'pause': 'Menu',
       'restart': '—',
       'mainMenu': '—'

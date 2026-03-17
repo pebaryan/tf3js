@@ -124,7 +124,6 @@ export function updateLevelVisuals(time: number) {
 function addNeonAccents(mesh: THREE.Mesh, w: number, h: number, d: number) {
   // Add a thin neon strip at the top and bottom of walls
   const stripHeight = 0.05;
-  const stripDepth = 0.02;
   
   // Top strips
   const topGeo = new THREE.BoxGeometry(w + 0.02, stripHeight, d + 0.02);
@@ -255,7 +254,7 @@ export function createLevel(scene: THREE.Scene, world: CANNON.World, levelConfig
   
   // Distance markers
   for (let i = 10; i <= 50; i += 10) {
-    createDistanceMarker(-12, 0.1, 40 + i, i.toString(), scene);
+    createDistanceMarker(-12, 40 + i, i.toString(), scene);
   }
 
   // === BOUNDARY WALLS ===
@@ -391,7 +390,7 @@ function createSlideRamp(x: number, y: number, z: number, width: number, length:
   world.addBody(body);
 }
 
-function createDistanceMarker(x: number, y: number, z: number, text: string, scene: THREE.Scene) {
+function createDistanceMarker(x: number, z: number, text: string, scene: THREE.Scene) {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
   canvas.height = 64;
@@ -444,33 +443,103 @@ function addSignage(scene: THREE.Scene, levelType: string) {
 
 function createSign(x: number, y: number, z: number, text: string, rotation: number, scene: THREE.Scene) {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 128;
+  canvas.width = 512;
+  canvas.height = 256;
   const ctx = canvas.getContext('2d')!;
-  
-  ctx.fillStyle = '#1a1a2e';
-  ctx.fillRect(0, 0, 256, 128);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(6, 16, 24, 0.92)';
   ctx.strokeStyle = '#00ffcc';
-  ctx.lineWidth = 4;
-  ctx.strokeRect(2, 2, 252, 124);
-  
-  ctx.fillStyle = '#00ffcc';
-  ctx.font = 'bold 24px Arial';
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.moveTo(54, 34);
+  ctx.lineTo(478, 34);
+  ctx.lineTo(454, 222);
+  ctx.lineTo(30, 222);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(0, 255, 204, 0.14)';
+  ctx.fillRect(78, 54, 356, 34);
+  ctx.fillStyle = '#9fffee';
+  ctx.font = 'bold 26px Arial';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  
+  ctx.fillText('TRAINING POI', 256, 71);
+
+  ctx.strokeStyle = 'rgba(0, 255, 204, 0.32)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(86, 192);
+  ctx.lineTo(426, 192);
+  ctx.stroke();
+
+  ctx.shadowColor = '#00ffcc';
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = '#00ffcc';
+  ctx.font = 'bold 44px Arial';
   const lines = text.split('\n');
   lines.forEach((line, i) => {
-    ctx.fillText(line, 128, 40 + i * 35);
+    ctx.fillText(line, 256, 118 + i * 44);
   });
-  
+  ctx.shadowBlur = 0;
+
   const tex = new THREE.CanvasTexture(canvas);
-  const geo = new THREE.PlaneGeometry(4, 2);
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(x, y, z);
-  mesh.rotation.y = rotation;
-  scene.add(mesh);
+  tex.colorSpace = THREE.SRGBColorSpace;
+
+  const group = new THREE.Group();
+  group.position.set(x, y + 3.8, z);
+  group.rotation.y = rotation;
+
+  const panelGeo = new THREE.PlaneGeometry(5.4, 2.7);
+  const panelMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+
+  const frontPanel = new THREE.Mesh(panelGeo, panelMat);
+  frontPanel.position.z = 0.06;
+  group.add(frontPanel);
+
+  const backPanel = new THREE.Mesh(panelGeo, panelMat.clone());
+  backPanel.rotation.y = Math.PI;
+  backPanel.position.z = -0.06;
+  group.add(backPanel);
+
+  const frame = new THREE.Mesh(
+    new THREE.BoxGeometry(5.65, 2.95, 0.08),
+    new THREE.MeshStandardMaterial({
+      color: 0x0b141c,
+      emissive: 0x00ffcc,
+      emissiveIntensity: 0.08,
+      metalness: 0.55,
+      roughness: 0.35,
+    })
+  );
+  group.add(frame);
+
+  const topGlow = new THREE.Mesh(
+    new THREE.BoxGeometry(5.1, 0.08, 0.16),
+    new THREE.MeshBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.7 })
+  );
+  topGlow.position.set(0, 1.23, 0);
+  group.add(topGlow);
+
+  const sideNotchGeo = new THREE.BoxGeometry(0.14, 2.45, 0.14);
+  const sideMat = new THREE.MeshStandardMaterial({
+    color: 0x12303a,
+    emissive: 0x00ffcc,
+    emissiveIntensity: 0.1,
+    metalness: 0.35,
+    roughness: 0.45,
+  });
+  const leftPost = new THREE.Mesh(sideNotchGeo, sideMat);
+  leftPost.position.set(-2.74, -0.08, 0);
+  group.add(leftPost);
+
+  const rightPost = new THREE.Mesh(sideNotchGeo, sideMat);
+  rightPost.position.set(2.74, -0.08, 0);
+  group.add(rightPost);
+
+  scene.add(group);
 }
 
 function addAccentLines(scene: THREE.Scene) {

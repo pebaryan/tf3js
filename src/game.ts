@@ -44,9 +44,6 @@ export class Game {
   private weaponPickups: WeaponPickup[] = [];
   private attachmentPickups: AttachmentPickup[] = [];
   private pickupPromptEl: HTMLElement | null = null;
-  private activePickupHold: WeaponPickup | null = null;
-  private activeAttachmentHold: AttachmentPickup | null = null;
-  private activeTitanHold = false;
   private activePickupHoldTime = 0;
   private readonly PICKUP_RANGE = 2;
   private readonly PICKUP_PROMPT_RANGE = 4;
@@ -496,24 +493,57 @@ export class Game {
       this.scene.add(mesh);
 
       const canvas = document.createElement('canvas');
-      canvas.width = 128;
-      canvas.height = 128;
+      canvas.width = 512;
+      canvas.height = 256;
       const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, 128, 128);
-      ctx.fillStyle = '#00ffcc';
-      ctx.font = 'bold 64px Arial';
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = 'rgba(2, 14, 20, 0.88)';
+      ctx.strokeStyle = '#00ffcc';
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(56, 36);
+      ctx.lineTo(476, 36);
+      ctx.lineTo(456, 220);
+      ctx.lineTo(36, 220);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(0, 255, 204, 0.16)';
+      ctx.fillRect(64, 52, 384, 36);
+
+      ctx.fillStyle = '#9fffee';
+      ctx.font = 'bold 28px Arial';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText((index + 1).toString(), 64, 64);
+      ctx.fillText('CHECKPOINT', 256, 70);
+
+      ctx.shadowColor = '#00ffcc';
+      ctx.shadowBlur = 20;
+      ctx.fillStyle = '#00ffcc';
+      ctx.font = 'bold 108px Arial';
+      ctx.fillText((index + 1).toString(), 256, 154);
+      ctx.shadowBlur = 0;
+
+      ctx.strokeStyle = 'rgba(0, 255, 204, 0.35)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(96, 194);
+      ctx.lineTo(416, 194);
+      ctx.stroke();
 
       const tex = new THREE.CanvasTexture(canvas);
-      const numGeo = new THREE.PlaneGeometry(2, 2);
-      const numMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
-      const numMesh = new THREE.Mesh(numGeo, numMat);
-      numMesh.position.set(checkpoint.position.x, checkpoint.position.y + 3, checkpoint.position.z);
-      numMesh.lookAt(new THREE.Vector3(0, 0, 1));
-      this.scene.add(numMesh);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const markerMat = new THREE.SpriteMaterial({
+        map: tex,
+        transparent: true,
+        depthWrite: false,
+      });
+      const marker = new THREE.Sprite(markerMat);
+      marker.position.set(checkpoint.position.x, checkpoint.position.y + 5.1, checkpoint.position.z);
+      marker.scale.set(5.6, 2.8, 1);
+      this.scene.add(marker);
     });
   }
 
@@ -670,72 +700,6 @@ export class Game {
     });
   }
 
-  private updateAttachmentPickups(delta: number) {
-    if (!this.player) return;
-    const time = performance.now() * 0.001;
-    let nearestAtt: AttachmentPickup | null = null;
-    let nearestDist = Infinity;
-
-    for (const pickup of this.attachmentPickups) {
-      if (pickup.cooldown > 0) {
-        pickup.cooldown -= delta;
-        pickup.mesh.visible = pickup.cooldown <= 0;
-        continue;
-      }
-      pickup.mesh.rotation.y += 3.0 * delta;
-      pickup.mesh.position.y = pickup.baseY + Math.sin(time * 4) * 0.05;
-      const dist = this.player.group.position.distanceTo(pickup.position);
-      if (dist < this.PICKUP_PROMPT_RANGE && dist < nearestDist) {
-        nearestDist = dist;
-        nearestAtt = pickup;
-      }
-    }
-
-    const canHold = !!nearestAtt && nearestDist < this.PICKUP_RANGE && this.player.isInteractHeld() && !this.player.isInteractConsumed();
-
-    if (canHold && nearestAtt) {
-      if (this.activeAttachmentHold !== nearestAtt) {
-        this.activeAttachmentHold = nearestAtt;
-        this.activePickupHoldTime = 0;
-      }
-      this.activePickupHoldTime = Math.min(this.PICKUP_HOLD_TIME, this.activePickupHoldTime + delta);
-      if (this.activePickupHoldTime >= this.PICKUP_HOLD_TIME) {
-        const weaponIdx = this.player['weaponManager'].getCurrentIndex();
-        this.player['weaponManager'].attach(weaponIdx, nearestAtt.attachment);
-        this.player['rebuildWeaponMesh']();
-        this.player['updateWeaponHUD']();
-        nearestAtt.mesh.visible = false;
-        nearestAtt.cooldown = 1000000;
-        this.player.consumeInteractHold();
-        this.activeAttachmentHold = null;
-        this.activePickupHoldTime = 0;
-      }
-    } else {
-      if (this.activeAttachmentHold === nearestAtt) {
-        this.activeAttachmentHold = null;
-        this.activePickupHoldTime = 0;
-      }
-    }
-
-    if (nearestAtt && !this.activePickupHold) {
-      const holdProgress = this.activeAttachmentHold === nearestAtt ? this.activePickupHoldTime / this.PICKUP_HOLD_TIME : 0;
-      this.updateAttachmentPrompt(nearestAtt, holdProgress);
-    }
-  }
-
-  private updateAttachmentPrompt(pickup: AttachmentPickup, holdProgress: number) {
-    if (!this.pickupPromptEl) {
-      this.pickupPromptEl = document.createElement('div');
-      this.pickupPromptEl.style.cssText = 'position:fixed;bottom:180px;left:50%;transform:translateX(-50%);color:#fff;font:14px monospace;z-index:100;background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:4px;text-align:center;pointer-events:none;';
-      document.body.appendChild(this.pickupPromptEl);
-    }
-    this.pickupPromptEl.style.display = 'block';
-    const interactKey = keyCodeToLabel(getBindings().embark);
-    const progressPct = Math.round(holdProgress * 100);
-    const color = '#00ffcc';
-    const progressBar = `<div style="margin-top:6px;width:220px;height:6px;background:rgba(255,255,255,0.15);border-radius:999px;overflow:hidden;"><div style="width:${progressPct}%;height:100%;background:${color};"></div></div>`;
-    this.pickupPromptEl.innerHTML = `Hold [${interactKey}] to equip <span style="color:${color}">${pickup.attachment.name}</span>${progressBar}`;
-  }
   private createPickupMesh(weapon: Weapon, position: THREE.Vector3): WeaponPickup {
     const group = new THREE.Group();
     const color = weapon.bulletVisuals.color;
@@ -1134,6 +1098,8 @@ export class Game {
       enemyCount: this.enemies.length,
       destroyedTargets: this.targets.filter(t => t.health <= 0).length,
       showSniperScope: this.player.shouldShowSniperScope(),
+      weapon: this.player.getWeaponHUDData(),
+      debug: this.player.getDebugHUDData(),
     });
   }
 

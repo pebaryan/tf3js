@@ -9,6 +9,7 @@ import { AimingSystem } from "./aiming";
 import { ReticleRenderer } from "./reticle";
 import { RadarRenderer } from "./radar";
 import { soundManager } from "./sound";
+import type { DebugHUDData, WeaponHUDData } from "./types";
 
 interface KeyState {
   forward: boolean;
@@ -317,7 +318,6 @@ export class Player {
   private grapplePreviewLine: THREE.Line | null = null;
   private grappleCooldown = 0;
   private grappleKeyHeld = false;
-  private grappleAimTarget = new THREE.Vector3();
   private grappleProjectile: THREE.Mesh | null = null;
   private grappleProjectileVelocity = new THREE.Vector3();
   private grappleProjectileActive = false;
@@ -705,8 +705,10 @@ export class Player {
       }
     } else {
       if (this.gamepadButtonXHoldTime > 0 && this.gamepadButtonXHoldTime < this.DISENGAGE_HOLD_TIME && !this.suppressInteractRelease) {
-        if (this.onEmbarkTitan) { this.lastEmbarkTime = performance.now(); this.onEmbarkTitan(); }
-        else { if (this.weaponManager.startReload()) soundManager.playSound('reload', 0.4); this.updateWeaponHUD(); }
+        if (!this.isPilotingTitan) {
+          if (this.weaponManager.startReload()) soundManager.playSound('reload', 0.4);
+          this.updateWeaponHUD();
+        }
       }
       this.gamepadButtonXHoldTime = 0; this.isDisembarking = false; this.hasTriggeredEmbark = false; this.suppressInteractRelease = false;
     }
@@ -784,7 +786,7 @@ export class Player {
         }
       }
       if (!hit && targets) { for (const target of targets) { if (target.checkBulletHit && target.checkBulletHit(b.mesh.position)) { target.takeDamage(this.activeWeapon.damage, b.mesh.position); this.impactRenderer.spawnImpact(b.mesh.position.clone(), b.velocity.clone().normalize().negate(), PLAYER_IMPACT_CONFIG); this.reticleRenderer.showHitmarker(target.health <= 0); hit = true; break; } } }
-      if (!hit && enemies) { for (const enemy of enemies) { if (enemy.checkBulletHit && enemy.checkBulletHit(b.mesh.position)) { const wasDead = enemy.health <= 0; enemy.takeDamage(this.activeWeapon.damage, b.mesh.position); this.impactRenderer.spawnImpact(b.mesh.position.clone(), b.velocity.clone().normalize().negate(), PLAYER_IMPACT_CONFIG); this.reticleRenderer.showHitmarker(enemy.health <= 0); hit = true; break; } } }
+      if (!hit && enemies) { for (const enemy of enemies) { if (enemy.checkBulletHit && enemy.checkBulletHit(b.mesh.position)) { enemy.takeDamage(this.activeWeapon.damage, b.mesh.position); this.impactRenderer.spawnImpact(b.mesh.position.clone(), b.velocity.clone().normalize().negate(), PLAYER_IMPACT_CONFIG); this.reticleRenderer.showHitmarker(enemy.health <= 0); hit = true; break; } } }
       if (hit || b.time > b.maxLifetime || b.mesh.position.y < -5) {
         if (hit && b.explosive) {
           this.impactRenderer.spawnExplosion(b.mesh.position.clone(), EPG_EXPLOSION_CONFIG); soundManager.playSound('explosion', 0.6);
@@ -972,7 +974,7 @@ export class Player {
           const pos = g.mesh.position.clone(); this.impactRenderer.spawnExplosion(pos, FRAG_EXPLOSION_CONFIG); soundManager.playSound('explosion', 0.6);
           const splashR = 6, damage = 100;
           if (targets) { for (const t of targets) { if (t.group && pos.distanceTo(t.group.position) < splashR) { t.takeDamage(Math.round(damage * (1 - pos.distanceTo(t.group.position) / splashR)), pos); this.reticleRenderer.showHitmarker(t.health <= 0); } } }
-          if (enemies) { for (const e of enemies) { if (e.group && pos.distanceTo(e.group.position) < splashR) { const wasDead = e.health <= 0; e.takeDamage(Math.round(damage * (1 - pos.distanceTo(e.group.position) / splashR)), pos); this.reticleRenderer.showHitmarker(e.health <= 0); } } }
+          if (enemies) { for (const e of enemies) { if (e.group && pos.distanceTo(e.group.position) < splashR) { e.takeDamage(Math.round(damage * (1 - pos.distanceTo(e.group.position) / splashR)), pos); this.reticleRenderer.showHitmarker(e.health <= 0); } } }
         }
         this.scene.remove(g.mesh); g.mesh.geometry.dispose(); (g.mesh.material as THREE.Material).dispose();
         this.scene.remove(g.trail); g.trail.geometry.dispose(); (g.trail.material as THREE.Material).dispose();
@@ -1040,28 +1042,74 @@ export class Player {
   }
 
   private updateWeaponHUD(): void {
-    let container = document.getElementById('weapon-hud');
-    if (!container) { container = document.createElement('div'); container.id = 'weapon-hud'; container.style.cssText = 'position:fixed;bottom:80px;right:20px;color:#fff;font:13px monospace;z-index:100;background:rgba(0,0,0,0.6);padding:8px 12px;border-radius:4px;line-height:1.6;text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 8px #000;'; document.body.appendChild(container); }
-    const idx = this.weaponManager.getCurrentIndex(), ammo = this.weaponManager.getCurrentAmmo(), mag = this.weaponManager.getEffectiveMagazineSize(this.activeWeapon), reloading = this.weaponManager.isReloading();
-    const weaponList = this.weaponManager.getAllWeapons().map((w, i) => `<span style="color:${i === idx ? '#00ffcc' : '#666'}">${i === idx ? '>' : ' '} ${i + 1}. ${w.name}</span>`).join('<br>');
-    
-    // Attachments display
-    const atts = this.activeWeapon.attachments;
-    const attList = [atts.optic?.name, atts.barrel?.name, atts.magazine?.name].filter(Boolean).join(', ');
-    const attText = attList ? `<br><span style="color:#aaa;font-size:11px;">[${attList}]</span>` : '';
+    const legacyHud = document.getElementById('weapon-hud');
+    legacyHud?.remove();
+  }
 
-    const ammoText = reloading ? `<span style="color:#ffaa00">RELOADING</span>` : `<span style="color:${ammo === 0 ? '#ff4444' : '#fff'}">${ammo} / ${mag}</span>`;
+  getWeaponHUDData(): WeaponHUDData {
+    const ammo = this.weaponManager.getCurrentAmmo();
+    const magazineSize = this.weaponManager.getEffectiveMagazineSize(this.activeWeapon);
+    const isReloading = this.weaponManager.isReloading();
     const grappleReady = this.grappleCooldown <= 0 && !this.grappleProjectileActive;
-    const grappleColor = this.isGrappling ? '#00ffcc' : grappleReady ? '#88cc88' : '#666';
-    const grappleLabel = this.isGrappling ? 'GRAPPLING' : this.grappleProjectileActive ? 'HOOKING...' : grappleReady ? 'READY' : `${this.grappleCooldown.toFixed(1)}s`;
-    const grappleProgress = grappleReady ? '' : `<div style="width:100%;height:3px;background:#333;margin-top:2px;"><div style="width:${Math.max(5, (1 - this.grappleCooldown / this.GRAPPLE_COOLDOWN) * 100)}%;height:100%;background:${grappleColor};transition:width 0.1s;"></div></div>`;
-    container.innerHTML = `${weaponList}${attText}<br><br>${ammoText}<br><span style="color:${this.grenadeCount > 0 ? '#88cc88' : '#ff4444'}">G: ${this.grenadeCount}</span><br><span style="color:${grappleColor}">Q: ${grappleLabel}</span>${grappleProgress}`;
+    const accentColor = '#' + this.activeWeapon.bulletVisuals.color.toString(16).padStart(6, '0');
+
+    return {
+      weaponName: this.activeWeapon.name,
+      ammo,
+      magazineSize,
+      isReloading,
+      reloadProgress: this.weaponManager.getReloadProgress(),
+      accentColor,
+      weaponSlots: this.weaponManager.getAllWeapons().map((weapon, index) => ({
+        index,
+        name: weapon.name,
+        active: index === this.weaponManager.getCurrentIndex(),
+      })),
+      attachments: [
+        this.activeWeapon.attachments.optic?.name,
+        this.activeWeapon.attachments.barrel?.name,
+        this.activeWeapon.attachments.magazine?.name,
+      ].filter((attachment): attachment is string => Boolean(attachment)),
+      grenadeCount: this.grenadeCount,
+      grappleLabel: this.isGrappling
+        ? 'GRAPPLING'
+        : this.grappleProjectileActive
+          ? 'HOOKING...'
+          : grappleReady
+            ? 'READY'
+            : `${this.grappleCooldown.toFixed(1)}s`,
+      grappleColor: this.isGrappling ? '#00ffcc' : grappleReady ? '#88cc88' : '#666666',
+      grappleProgress: grappleReady ? 1 : Math.max(0.05, 1 - this.grappleCooldown / this.GRAPPLE_COOLDOWN),
+    };
+  }
+
+  getDebugHUDData(): DebugHUDData {
+    const movementState = this.movement.isMantling
+      ? "MANTLE"
+      : this.movement.isSliding
+        ? "SLIDE"
+        : this.movement.isWallRunning
+          ? "WALLRUN"
+          : this.movement.isGrounded
+            ? "GROUND"
+            : "AIR";
+
+    return {
+      speed: this.movement.hSpeed(),
+      movementState,
+      velocity: {
+        x: this.movement.vel.x,
+        y: this.movement.vel.y,
+        z: this.movement.vel.z,
+      },
+      jumpCount: this.movement.jumpCount,
+      sprinting: this.keys.sprint || this.gamepadSprint,
+      crouching: this.keys.crouch || this.gamepadCrouch,
+    };
   }
 
   private updateUI() {
-    let el = document.getElementById("debug-speed");
-    if (!el) { el = document.createElement("div"); el.id = "debug-speed"; el.style.cssText = "position:fixed;top:20px;right:20px;color:#0f0;font:14px monospace;z-index:100;background:rgba(0,0,0,0.7);padding:8px;line-height:1.5;"; document.body.appendChild(el); }
-    const m = this.movement, state = m.isMantling ? "MANTLE" : m.isSliding ? "SLIDE" : m.isWallRunning ? "WALLRUN" : m.isGrounded ? "GROUND" : "AIR";
-    el.innerHTML = `Speed: ${m.hSpeed().toFixed(1)}<br>State: ${state}<br>Vel: ${m.vel.x.toFixed(1)}, ${m.vel.y.toFixed(1)}, ${m.vel.z.toFixed(1)}<br>Jumps: ${m.jumpCount}<br><span style="color:${(this.keys.sprint || this.gamepadSprint) ? "#00ff00" : "#888888"}">SPRINT: ${(this.keys.sprint || this.gamepadSprint) ? "ON" : "off"}</span> | Crouch: ${this.keys.crouch || this.gamepadCrouch}`;
+    const legacyDebug = document.getElementById("debug-speed");
+    legacyDebug?.remove();
   }
 }

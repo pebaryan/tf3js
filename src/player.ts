@@ -363,7 +363,7 @@ export class Player {
 
   private isGrappling = false;
   private grappleTarget = new THREE.Vector3();
-  private grappleRope: THREE.Line | null = null;
+  private grappleRope: THREE.Mesh | null = null;
   private grapplePreviewLine: THREE.Line | null = null;
   private grappleCooldown = 0;
   private grappleKeyHeld = false;
@@ -371,11 +371,18 @@ export class Player {
   private grappleProjectileVelocity = new THREE.Vector3();
   private grappleProjectileActive = false;
   private readonly GRAPPLE_RANGE = 50;
-  private readonly GRAPPLE_PULL_SPEED = 30;
+  private readonly GRAPPLE_PULL_ACCEL = 42;
   private readonly GRAPPLE_COOLDOWN = 2;
-  private readonly GRAPPLE_PROJECTILE_SPEED = 60;
-  private readonly GRAPPLE_GRAVITY = -15;
-  private readonly GRAPPLE_TANGENT_BOOST = 1.2;
+  private readonly GRAPPLE_PROJECTILE_SPEED = 95;
+  private readonly GRAPPLE_PROJECTILE_GRAVITY = -4;
+  private readonly GRAPPLE_HOLD_GRAVITY = -8;
+  private readonly GRAPPLE_TANGENT_BOOST = 1.1;
+  private readonly GRAPPLE_INITIAL_BOOST = 8;
+  private readonly GRAPPLE_RELEASE_BOOST = 1.08;
+  private readonly GRAPPLE_MAX_SPEED = 34;
+  private readonly GRAPPLE_SLACK_DISTANCE = 2.75;
+  private readonly GRAPPLE_ROPE_RADIUS = 0.018;
+  private readonly GRAPPLE_ROPE_SEGMENTS = 18;
 
   private gamepadIndex: number | null = null;
   private gamepadMove = new THREE.Vector2();
@@ -654,6 +661,7 @@ export class Player {
   }
 
   private onKeyDown(e: KeyboardEvent) {
+    if (e.repeat && e.code === 'KeyQ') return;
     const b = getBindings();
     if (e.code === b.forward) this.keys.forward = true;
     else if (e.code === b.backward) this.keys.backward = true;
@@ -665,7 +673,7 @@ export class Player {
     else if (e.code === b.embark) { this.keys.embark = true; this.keyboardEmbarkStartTime = performance.now(); this.hasTriggeredEmbark = false; this.suppressInteractRelease = false; }
     else if (e.code === 'KeyR') { if (this.weaponManager.startReload()) soundManager.playSound('reload', 0.4); this.updateWeaponHUD(); }
     else if (e.code === 'KeyG') this.grenadeHeld = true;
-    else if (e.code === 'KeyQ') { this.grappleKeyHeld = true; this.startGrapple(); }
+    else if (e.code === 'KeyQ') this.toggleGrapple();
     else if (e.code === 'Digit1') this.switchWeapon(this.weaponManager.switchTo(0));
     else if (e.code === 'Digit2') this.switchWeapon(this.weaponManager.switchTo(1));
     else if (e.code === 'Digit3') this.switchWeapon(this.weaponManager.switchTo(2));
@@ -694,7 +702,6 @@ export class Player {
       this.hasTriggeredEmbark = false;
       this.suppressInteractRelease = false;
     }
-    else if (e.code === 'KeyQ') { this.grappleKeyHeld = false; this.stopGrapple(); }
     else if (e.code === 'KeyG') { if (this.grenadeHeld) { this.grenadeHeld = false; this.throwGrenade(); } }
   }
 
@@ -821,8 +828,7 @@ export class Player {
     if (menuBtn && !this.gamepadMenuPrev && this.onPause) this.onPause();
     this.gamepadMenuPrev = menuBtn; this.gamepadTitanDash = buttonA;
     if (!this.isPilotingTitan) {
-      if (buttonA && !this.gamepadGrapplePrev) { this.grappleKeyHeld = true; this.startGrapple(); }
-      else if (!buttonA && this.gamepadGrapplePrev) { this.grappleKeyHeld = false; this.stopGrapple(); }
+      if (buttonA && !this.gamepadGrapplePrev) this.toggleGrapple();
     }
     this.gamepadGrapplePrev = buttonA;
     this.gamepadSprint = Math.hypot(gp.axes[0] || 0, gp.axes[1] || 0) > 0.9;
@@ -949,10 +955,89 @@ export class Player {
     this.titanMeter = Math.min(100, this.titanMeter + 0.5); if (this.onTitanMeterChange) this.onTitanMeterChange(this.titanMeter);
   }
 
-  private startGrapple(): void {
-    if (this.isGrappling || this.grappleCooldown > 0 || this.grappleProjectileActive) return;
+  private clearGrappleRope(): void {
+    if (!this.grappleRope) return;
+    this.scene.remove(this.grappleRope);
+    this.grappleRope.geometry.dispose();
+    (this.grappleRope.material as THREE.Material).dispose();
+    this.grappleRope = null;
+  }
+
+  private createGrappleRope(): void {
+    this.clearGrappleRope();
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x00ffcc,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+    });
+    this.grappleRope = new THREE.Mesh(
+      new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3([new THREE.Vector3(), new THREE.Vector3(0, 0, 0.01)]),
+        this.GRAPPLE_ROPE_SEGMENTS,
+        this.GRAPPLE_ROPE_RADIUS,
+        8,
+        false,
+      ),
+      material,
+    );
+    this.grappleRope.userData.ignoreRaycast = true;
+    this.scene.add(this.grappleRope);
+  }
+
+  private updateGrappleRope(start: THREE.Vector3, end: THREE.Vector3, slackAmount: number): void {
+    if (!this.grappleRope) return;
+
+    const distance = start.distanceTo(end);
+    if (distance < 0.05) return;
+
+    const dir = end.clone().sub(start).normalize();
+    const mid = start.clone().lerp(end, 0.5);
+    const side = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0));
+    if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+    else side.normalize();
+
+    const sag = Math.min(1.35, Math.max(0.08, slackAmount));
+    const bow = Math.min(0.32, distance * 0.015);
+    const controlA = start.clone().lerp(mid, 0.45).add(new THREE.Vector3(0, -sag, 0)).add(side.clone().multiplyScalar(bow));
+    const controlB = mid.clone().lerp(end, 0.55).add(new THREE.Vector3(0, -sag * 0.7, 0)).add(side.multiplyScalar(-bow * 0.6));
+    const curve = new THREE.CatmullRomCurve3([start.clone(), controlA, controlB, end.clone()], false, 'centripetal');
+    const segments = Math.max(this.GRAPPLE_ROPE_SEGMENTS, Math.min(32, Math.ceil(distance * 2.5)));
+    const nextGeometry = new THREE.TubeGeometry(curve, segments, this.GRAPPLE_ROPE_RADIUS, 8, false);
+
+    this.grappleRope.geometry.dispose();
+    this.grappleRope.geometry = nextGeometry;
+  }
+
+  private cancelGrappleProjectile(applyCooldown: boolean): void {
+    if (this.grappleProjectile) {
+      this.scene.remove(this.grappleProjectile);
+      this.grappleProjectile.geometry.dispose();
+      (this.grappleProjectile.material as THREE.Material).dispose();
+      this.grappleProjectile = null;
+    }
+    this.grappleProjectileActive = false;
+    if (applyCooldown) this.grappleCooldown = this.GRAPPLE_COOLDOWN * 0.5;
+    this.clearGrappleRope();
+  }
+
+  private toggleGrapple(): void {
+    if (this.isPilotingTitan) return;
+    if (this.isGrappling || this.grappleProjectileActive) {
+      this.grappleKeyHeld = false;
+      this.stopGrapple();
+      return;
+    }
+
+    if (this.startGrapple()) {
+      this.grappleKeyHeld = true;
+    }
+  }
+
+  private startGrapple(): boolean {
+    if (this.isGrappling || this.grappleCooldown > 0 || this.grappleProjectileActive) return false;
     const raycaster = new THREE.Raycaster(); raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera); raycaster.far = this.GRAPPLE_RANGE;
-    const hits = raycaster.intersectObjects(this.getMeshes()); if (hits.length === 0) return;
+    const hits = raycaster.intersectObjects(this.getMeshes()); if (hits.length === 0) return false;
     const handOffset = new THREE.Vector3(0.2, -0.15, -0.3).applyQuaternion(this.camera.quaternion);
     const startPos = this.camera.position.clone().add(handOffset);
     this.grappleProjectile = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), new THREE.MeshBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.9 }));
@@ -960,20 +1045,21 @@ export class Player {
     this.grappleProjectile.userData.ignoreRaycast = true;
     this.grappleProjectileVelocity = hits[0].point.clone().sub(startPos).normalize().multiplyScalar(this.GRAPPLE_PROJECTILE_SPEED);
     this.grappleProjectileActive = true;
-    const ropeGeo = new THREE.BufferGeometry(); ropeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-    this.grappleRope = new THREE.Line(ropeGeo, new THREE.LineBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.7, linewidth: 2 }));
-    this.scene.add(this.grappleRope); this.scene.add(this.grappleProjectile); this.updateWeaponHUD();
+    this.createGrappleRope();
+    this.updateGrappleRope(startPos, this.grappleProjectile.position, 0.12);
+    this.scene.add(this.grappleProjectile); this.updateWeaponHUD();
+    return true;
   }
 
   private updateGrappleProjectile(delta: number): void {
     if (!this.grappleProjectileActive || !this.grappleProjectile) return;
-    this.grappleProjectileVelocity.y += this.GRAPPLE_GRAVITY * delta;
+    this.grappleProjectileVelocity.y += this.GRAPPLE_PROJECTILE_GRAVITY * delta;
     const oldPos = this.grappleProjectile.position.clone();
     this.grappleProjectile.position.add(this.grappleProjectileVelocity.clone().multiplyScalar(delta));
     if (this.grappleRope) {
       const ropeStart = this.camera.position.clone().add(new THREE.Vector3(0.2, -0.15, -0.3).applyQuaternion(this.camera.quaternion));
-      const posAttr = this.grappleRope.geometry.attributes.position as THREE.BufferAttribute;
-      posAttr.setXYZ(0, ropeStart.x, ropeStart.y, ropeStart.z); posAttr.setXYZ(1, this.grappleProjectile.position.x, this.grappleProjectile.position.y, this.grappleProjectile.position.z); posAttr.needsUpdate = true;
+      const ropeSlack = Math.max(0.08, ropeStart.distanceTo(this.grappleProjectile.position) * 0.02);
+      this.updateGrappleRope(ropeStart, this.grappleProjectile.position, ropeSlack);
     }
     const dist = this.grappleProjectile.position.distanceTo(oldPos);
     if (dist > 0.01) {
@@ -986,9 +1072,9 @@ export class Player {
       }
     }
     if (this.grappleProjectile.position.distanceTo(this.camera.position) > this.GRAPPLE_RANGE) {
-      this.scene.remove(this.grappleProjectile); this.grappleProjectile.geometry.dispose(); (this.grappleProjectile.material as THREE.Material).dispose(); this.grappleProjectile = null;
-      this.grappleProjectileActive = false; this.grappleCooldown = this.GRAPPLE_COOLDOWN * 0.5;
-      if (this.grappleRope) { this.scene.remove(this.grappleRope); this.grappleRope.geometry.dispose(); (this.grappleRope.material as THREE.Material).dispose(); this.grappleRope = null; }
+      this.grappleKeyHeld = false;
+      this.cancelGrappleProjectile(true);
+      this.updateWeaponHUD();
     }
   }
 
@@ -996,24 +1082,40 @@ export class Player {
     this.isGrappling = true;
     if (this.grapplePreviewLine) { this.scene.remove(this.grapplePreviewLine); this.grapplePreviewLine.geometry.dispose(); (this.grapplePreviewLine.material as THREE.Material).dispose(); this.grapplePreviewLine = null; }
     if (this.grappleRope) {
-      (this.grappleRope.material as THREE.LineBasicMaterial).opacity = 0.85;
-      (this.grappleRope.geometry.attributes.position as THREE.BufferAttribute).setXYZ(1, this.grappleTarget.x, this.grappleTarget.y, this.grappleTarget.z); this.grappleRope.geometry.attributes.position.needsUpdate = true;
+      (this.grappleRope.material as THREE.MeshBasicMaterial).opacity = 0.85;
+      const ropeStart = this.group.position.clone().add(new THREE.Vector3(0, 0.3, 0));
+      const ropeSlack = Math.max(0.12, ropeStart.distanceTo(this.grappleTarget) * 0.025);
+      this.updateGrappleRope(ropeStart, this.grappleTarget, ropeSlack);
     }
     this.movement.isWallRunning = false; this.movement.isSliding = false; this.movement.isMantling = false;
     const toTarget = this.grappleTarget.clone().sub(this.group.position);
-    if (toTarget.length() > 5) {
-      const playerVel = this.movement.vel, toTargetNorm = toTarget.clone().normalize();
-      const velTangent = playerVel.clone().sub(toTargetNorm.clone().multiplyScalar(playerVel.dot(toTargetNorm)));
-      if (velTangent.length() > 1) this.movement.vel.copy(velTangent.multiplyScalar(this.GRAPPLE_TANGENT_BOOST)).add(toTargetNorm.clone().multiplyScalar(playerVel.dot(toTargetNorm)));
+    if (toTarget.length() > 0.1) {
+      const playerVel = this.movement.vel;
+      const toTargetNorm = toTarget.clone().normalize();
+      const inwardSpeed = playerVel.dot(toTargetNorm);
+      const tangentialVel = playerVel.clone().sub(toTargetNorm.clone().multiplyScalar(inwardSpeed));
+
+      this.movement.vel.copy(tangentialVel.multiplyScalar(this.GRAPPLE_TANGENT_BOOST));
+
+      if (inwardSpeed > 0) {
+        this.movement.vel.add(toTargetNorm.clone().multiplyScalar(inwardSpeed));
+      }
+
+      this.movement.vel.add(toTargetNorm.clone().multiplyScalar(this.GRAPPLE_INITIAL_BOOST));
     }
     soundManager.playSound('grapple', 0.4); this.updateWeaponHUD();
   }
 
   private stopGrapple(): void {
+    if (this.grappleProjectileActive) {
+      this.cancelGrappleProjectile(true);
+      this.updateWeaponHUD();
+      return;
+    }
     if (!this.isGrappling) return;
-    if (this.movement.vel.length() > 5) this.movement.vel.multiplyScalar(1.15);
-    this.isGrappling = false; this.grappleCooldown = this.GRAPPLE_COOLDOWN;
-    if (this.grappleRope) { this.scene.remove(this.grappleRope); this.grappleRope.geometry.dispose(); (this.grappleRope.material as THREE.Material).dispose(); this.grappleRope = null; }
+    if (this.movement.vel.length() > 5) this.movement.vel.multiplyScalar(this.GRAPPLE_RELEASE_BOOST);
+    this.isGrappling = false; this.grappleCooldown = this.GRAPPLE_COOLDOWN; this.grappleKeyHeld = false;
+    this.clearGrappleRope();
     this.updateWeaponHUD();
   }
 
@@ -1027,18 +1129,32 @@ export class Player {
     const m = this.movement, playerPos = this.group.position, toTarget = this.grappleTarget.clone().sub(playerPos), dist = toTarget.length();
     if (this.grappleRope) {
       const ropeStart = playerPos.clone().add(new THREE.Vector3(0, 0.3, 0));
-      const posAttr = this.grappleRope.geometry.attributes.position as THREE.BufferAttribute;
-      posAttr.setXYZ(0, ropeStart.x, ropeStart.y, ropeStart.z); posAttr.setXYZ(1, this.grappleTarget.x, this.grappleTarget.y, this.grappleTarget.z); posAttr.needsUpdate = true;
+      const ropeSlack = Math.max(0.05, (dist - this.GRAPPLE_SLACK_DISTANCE) * 0.18);
+      this.updateGrappleRope(ropeStart, this.grappleTarget, ropeSlack);
     }
     if (dist < 2.0) { this.stopGrapple(); return; }
     if (this.jumpJustPressed) { this.jumpJustPressed = false; m.vel.y = Math.max(m.vel.y, 9); this.stopGrapple(); return; }
     if (!this.grappleKeyHeld) { this.stopGrapple(); return; }
     const dir = toTarget.clone().normalize();
-    m.vel.add(dir.clone().multiplyScalar(this.GRAPPLE_PULL_SPEED * delta));
+    const slackRatio = THREE.MathUtils.clamp((dist - this.GRAPPLE_SLACK_DISTANCE) / 8, 0, 1);
+    if (slackRatio > 0) {
+      m.vel.add(dir.clone().multiplyScalar(this.GRAPPLE_PULL_ACCEL * slackRatio * delta));
+    }
+
+    const inwardSpeed = m.vel.dot(dir);
+    if (slackRatio > 0 && inwardSpeed < 22) {
+      m.vel.add(dir.clone().multiplyScalar((22 - inwardSpeed) * 0.12));
+    }
+
     const tangentialVel = m.vel.clone().sub(dir.clone().multiplyScalar(m.vel.dot(dir)));
-    if (tangentialVel.length() > 2) m.vel.add(tangentialVel.clone().multiplyScalar(0.05));
-    m.vel.y += this.GRAPPLE_GRAVITY * delta;
-    if (m.vel.length() > 40) m.vel.multiplyScalar(40 / m.vel.length());
+    if (slackRatio < 0.25 && tangentialVel.length() > 0.1) {
+      const damp = Math.max(0, 1 - delta * 0.6);
+      tangentialVel.multiplyScalar(damp);
+      m.vel.copy(dir.clone().multiplyScalar(m.vel.dot(dir)).add(tangentialVel));
+    }
+
+    m.vel.y += this.GRAPPLE_HOLD_GRAVITY * delta;
+    if (m.vel.length() > this.GRAPPLE_MAX_SPEED) m.vel.multiplyScalar(this.GRAPPLE_MAX_SPEED / m.vel.length());
   }
 
   private throwGrenade(): void {
@@ -1116,13 +1232,15 @@ export class Player {
 
   private updateGrappleTrajectory(): void {
     if (!document.pointerLockElement) { if (this.grapplePreviewLine) { this.scene.remove(this.grapplePreviewLine); this.grapplePreviewLine.geometry.dispose(); (this.grapplePreviewLine.material as THREE.Material).dispose(); this.grapplePreviewLine = null; } return; }
-    if (!(this.grappleKeyHeld && !this.isGrappling && this.grappleCooldown <= 0)) { if (this.grapplePreviewLine) { this.scene.remove(this.grapplePreviewLine); this.grapplePreviewLine.geometry.dispose(); (this.grapplePreviewLine.material as THREE.Material).dispose(); this.grapplePreviewLine = null; } return; }
+    if (!(this.grappleKeyHeld && !this.isGrappling && !this.grappleProjectileActive && this.grappleCooldown <= 0)) { if (this.grapplePreviewLine) { this.scene.remove(this.grapplePreviewLine); this.grapplePreviewLine.geometry.dispose(); (this.grapplePreviewLine.material as THREE.Material).dispose(); this.grapplePreviewLine = null; } return; }
     const raycaster = new THREE.Raycaster(); raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera); raycaster.far = this.GRAPPLE_RANGE;
     const hits = raycaster.intersectObjects(this.getMeshes());
     if (hits.length > 0) {
       const start = this.group.position.clone().add(new THREE.Vector3(0, 0.3, 0)), end = hits[0].point.clone();
       if (this.grapplePreviewLine) { const posAttr = this.grapplePreviewLine.geometry.attributes.position as THREE.BufferAttribute; posAttr.setXYZ(0, start.x, start.y, start.z); posAttr.setXYZ(1, end.x, end.y, end.z); posAttr.needsUpdate = true; }
       else { this.grapplePreviewLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([start, end]), new THREE.LineDashedMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.5, dashSize: 1, gapSize: 0.5 })); (this.grapplePreviewLine as THREE.Line).computeLineDistances(); this.scene.add(this.grapplePreviewLine); }
+    } else if (this.grapplePreviewLine) {
+      this.scene.remove(this.grapplePreviewLine); this.grapplePreviewLine.geometry.dispose(); (this.grapplePreviewLine.material as THREE.Material).dispose(); this.grapplePreviewLine = null;
     }
   }
 

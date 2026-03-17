@@ -4,9 +4,10 @@ import { BulletVisuals } from './weapons';
 export interface Bullet {
   mesh: THREE.Mesh;
   meshType?: string;
-  trail: THREE.Line | null;
+  trail: THREE.Mesh | null;
   trailPositions: THREE.Vector3[];
   maxTrailLength: number;
+  trailRadius: number;
   velocity: THREE.Vector3;
   time: number;
   maxLifetime: number;
@@ -45,17 +46,24 @@ export class BallisticsSystem {
     this.scene.add(mesh);
 
     // Create trail if enabled
-    let trail: THREE.Line | null = null;
+    let trail: THREE.Mesh | null = null;
+    const trailRadius = Math.max(visuals.radius * 0.9, 0.012);
     if (visuals.hasTrail) {
-      const trailGeo = new THREE.BufferGeometry();
-      const trailMat = new THREE.LineBasicMaterial({
+      const trailGeo = new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3([startPos.clone(), startPos.clone().add(velocity.clone().setLength(0.01))]),
+        1,
+        trailRadius,
+        6,
+        false,
+      );
+      const trailMat = new THREE.MeshBasicMaterial({
         color: visuals.trailColor,
         transparent: true,
-        opacity: 0.8,
-        linewidth: 4,
+        opacity: 0.28,
         blending: THREE.AdditiveBlending, // Glow effect
+        depthWrite: false,
       });
-      trail = new THREE.Line(trailGeo, trailMat);
+      trail = new THREE.Mesh(trailGeo, trailMat);
       this.scene.add(trail);
     }
 
@@ -65,6 +73,7 @@ export class BallisticsSystem {
       trail,
       trailPositions: [mesh.position.clone()],
       maxTrailLength: visuals.trailLength || 20,
+      trailRadius,
       velocity,
       time: 0,
       maxLifetime: visuals.maxLifetime,
@@ -101,19 +110,24 @@ export class BallisticsSystem {
       }
 
       if (bullet.trailPositions.length >= 2) {
-        const positions: number[] = [];
-        for (const pos of bullet.trailPositions) {
-          positions.push(pos.x, pos.y, pos.z);
-        }
-        bullet.trail.geometry.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(positions, 3),
+        const curve = new THREE.CatmullRomCurve3(
+          bullet.trailPositions.map((pos) => pos.clone()),
+          false,
+          'centripetal',
         );
-        (bullet.trail.geometry as THREE.BufferGeometry).attributes.position.needsUpdate = true;
+        const nextGeometry = new THREE.TubeGeometry(
+          curve,
+          Math.max(2, bullet.trailPositions.length - 1),
+          bullet.trailRadius,
+          6,
+          false,
+        );
+        bullet.trail.geometry.dispose();
+        bullet.trail.geometry = nextGeometry;
 
         // Fade trail based on age
         const alpha = 1 - bullet.time / bullet.maxLifetime;
-        (bullet.trail.material as THREE.LineBasicMaterial).opacity = Math.max(0, alpha * 0.5);
+        (bullet.trail.material as THREE.MeshBasicMaterial).opacity = Math.max(0, alpha * 0.22);
       }
     }
   }

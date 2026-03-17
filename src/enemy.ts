@@ -16,13 +16,6 @@ enum EnemyState {
   SEEK_COVER,
 }
 
-interface DamageNumber {
-  mesh: THREE.Mesh;
-  velocity: THREE.Vector3;
-  life: number;
-  maxLife: number;
-}
-
 // Red/orange enemy bullet visuals
 const ENEMY_BULLET_VISUALS = {
   meshType: 'sphere' as const,
@@ -93,11 +86,9 @@ export class Enemy {
   private difficulty: number; // 0-1, affects accuracy, reaction, aggression
 
   // --- Visuals ---
-  private damageNumbers: DamageNumber[] = [];
   private isFlashing = false;
   private flashTimer = 0;
   private flashMeshes: THREE.Mesh[] = [];
-  private readonly DAMAGE_NUMBER_LIFE = 1.0;
 
   // --- Animation ---
   private headMesh: THREE.Mesh | null = null;
@@ -243,7 +234,7 @@ export class Enemy {
     return this.mesh.position;
   }
 
-  takeDamage(amount: number, hitPoint?: THREE.Vector3): void {
+  takeDamage(amount: number): void {
     this.health = Math.max(0, this.health - amount);
 
     // Flash white
@@ -253,58 +244,12 @@ export class Enemy {
       (fm.material as THREE.MeshBasicMaterial).opacity = 0.5;
     }
 
-    // Spawn damage number
-    const spawnPoint = hitPoint || this.mesh.position.clone().add(new THREE.Vector3(0, 1, 0));
-    this.spawnDamageNumber(amount, spawnPoint);
-
     // Taking damage = instant aggro, skip reaction time
     this.reactionTimer = this.reactionTime;
     if (this.state === EnemyState.IDLE || this.state === EnemyState.PATROL) {
       this.state = EnemyState.CHASE;
       this.stateTimer = 0;
     }
-  }
-
-  private spawnDamageNumber(damage: number, position: THREE.Vector3): void {
-    const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d')!;
-
-    ctx.fillStyle = 'rgba(0, 0, 0, 0)';
-    ctx.fillRect(0, 0, 128, 128);
-    ctx.font = 'bold 48px Arial';
-    ctx.fillStyle = '#ff0000';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 3;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const text = Math.round(damage).toString();
-    ctx.strokeText(text, 64, 64);
-    ctx.fillText(text, 64, 64);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    const geo = new THREE.PlaneGeometry(1, 1);
-    const mat = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(position).add(new THREE.Vector3(0, 0.5, 0));
-    mesh.lookAt(this.scene.position);
-    this.scene.add(mesh);
-
-    this.damageNumbers.push({
-      mesh,
-      velocity: new THREE.Vector3(
-        (Math.random() - 0.5) * 0.5,
-        1 + Math.random() * 0.5,
-        (Math.random() - 0.5) * 0.5,
-      ),
-      life: this.DAMAGE_NUMBER_LIFE,
-      maxLife: this.DAMAGE_NUMBER_LIFE,
-    });
   }
 
   // --- Line of Sight ---
@@ -366,7 +311,7 @@ export class Enemy {
 
   // --- Main AI Update ---
 
-  update(delta: number, cameraPos: THREE.Vector3, playerPos: THREE.Vector3, worldMeshes: THREE.Mesh[], playerVel?: THREE.Vector3): void {
+  update(delta: number, _cameraPos: THREE.Vector3, playerPos: THREE.Vector3, worldMeshes: THREE.Mesh[], playerVel?: THREE.Vector3): void {
     this.stateTimer += delta;
     this.fireTimer += delta;
     if (this.burstCooldown > 0) this.burstCooldown -= delta;
@@ -415,22 +360,6 @@ export class Enemy {
       }
     }
 
-    // --- Update damage numbers ---
-    for (let i = this.damageNumbers.length - 1; i >= 0; i--) {
-      const dn = this.damageNumbers[i];
-      dn.life -= delta;
-      dn.mesh.position.add(dn.velocity.clone().multiplyScalar(delta));
-      dn.mesh.lookAt(cameraPos);
-      (dn.mesh.material as THREE.MeshBasicMaterial).opacity = dn.life / dn.maxLife;
-      if (dn.life <= 0) {
-        this.scene.remove(dn.mesh);
-        dn.mesh.geometry.dispose();
-        const mat = dn.mesh.material as THREE.MeshBasicMaterial;
-        mat.map?.dispose();
-        mat.dispose();
-        this.damageNumbers.splice(i, 1);
-      }
-    }
   }
 
   private updateStateMachine(dist: number, delta: number): void {
@@ -772,14 +701,5 @@ export class Enemy {
     }
     this.bullets = [];
 
-    // Clean up damage numbers
-    this.damageNumbers.forEach((dn) => {
-      this.scene.remove(dn.mesh);
-      dn.mesh.geometry.dispose();
-      const mat = dn.mesh.material as THREE.MeshBasicMaterial;
-      mat.map?.dispose();
-      mat.dispose();
-    });
-    this.damageNumbers = [];
   }
 }

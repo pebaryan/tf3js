@@ -66,6 +66,42 @@ export class Game {
   private checkpointProgress = 0;
   private lastEmbarkIndicatorState = false;
 
+  private getTargetSpawnPositions(): THREE.Vector3[] {
+    if (!this.currentLevel) return [];
+
+    switch (this.currentLevel.id) {
+      case 1:
+        return [
+          new THREE.Vector3(-5.5, 0.75, 34),
+          new THREE.Vector3(5.5, 0.75, 34),
+          new THREE.Vector3(-5.5, 0.75, 43),
+          new THREE.Vector3(5.5, 0.75, 43),
+          new THREE.Vector3(0, 0, 64),
+        ];
+      case 2:
+        return [
+          new THREE.Vector3(0, 0, -12),
+          new THREE.Vector3(0, 0, -24),
+          new THREE.Vector3(0, 0, -36),
+          new THREE.Vector3(-6, 0, -46),
+          new THREE.Vector3(6, 0, -46),
+          new THREE.Vector3(-6, 0, -68),
+          new THREE.Vector3(6, 0, -68),
+          new THREE.Vector3(12, 0, -56),
+        ];
+      case 3:
+        return [
+          new THREE.Vector3(-22, 0, 28),
+          new THREE.Vector3(22, 0, 28),
+          new THREE.Vector3(0, 0.75, 34),
+        ];
+      default:
+        return Array.from({ length: this.currentLevel.targetCount }, (_, i) =>
+          new THREE.Vector3((i % 3) * 8 - 8, 0, Math.floor(i / 3) * 8 + 34)
+        );
+    }
+  }
+
   constructor(containerId: string) {
     this.gameContainer = document.getElementById(containerId) || document.body;
     this.stats = {
@@ -370,6 +406,7 @@ export class Game {
     this.stats.health = 100;
     this.levelStartTime = Date.now();
     this.scoreMultiplier = 1;
+    this.targets.forEach((target) => target.dispose());
     this.targets = [];
     this.enemies = [];
     this.capturePoints = [];
@@ -424,10 +461,8 @@ export class Game {
     this.spawnWeaponPickups();
 
     if (this.currentLevel.type === LevelType.TRAINING || this.currentLevel.type === LevelType.CAPTURE) {
-      for (let i = 0; i < this.currentLevel.targetCount; i++) {
-        const x = (i % 3) * 8 - 8;
-        const z = Math.floor(i / 3) * 8 + 40;
-        this.targets.push(new Target(this.scene, this.world, x, 0, z));
+      for (const position of this.getTargetSpawnPositions()) {
+        this.targets.push(new Target(this.scene, this.world, position.x, position.y, position.z));
       }
     }
 

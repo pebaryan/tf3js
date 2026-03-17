@@ -562,6 +562,46 @@ export class Player {
     return aimDir.clone().add(right.multiplyScalar(Math.cos(angle) * radius)).add(up.multiplyScalar(Math.sin(angle) * radius)).normalize();
   }
 
+  private getCameraAimPoint(weapon: Weapon, aimDir: THREE.Vector3): THREE.Vector3 {
+    const raycaster = new THREE.Raycaster(this.camera.position, aimDir.clone().normalize(), 0, weapon.range);
+    const intersects = raycaster.intersectObjects(this.getMeshes(), false);
+    if (intersects.length > 0) return intersects[0].point.clone();
+    return this.camera.position.clone().add(aimDir.clone().multiplyScalar(weapon.range));
+  }
+
+  private getProjectileVelocity(
+    weapon: Weapon,
+    startPos: THREE.Vector3,
+    cameraShotDir: THREE.Vector3,
+    aimPoint: THREE.Vector3,
+    isADS: boolean,
+  ): THREE.Vector3 {
+    const directToAim = aimPoint.clone().sub(startPos);
+    if (directToAim.lengthSq() < 1e-6) {
+      return cameraShotDir.clone().multiplyScalar(weapon.bulletSpeed);
+    }
+
+    directToAim.normalize();
+
+    const maxConvergeDeg = weapon.bulletSpeed <= 70
+      ? 12
+      : weapon.bulletsPerShot > 1
+        ? 9
+        : isADS
+          ? 5
+          : 8;
+    const maxConvergeRad = THREE.MathUtils.degToRad(maxConvergeDeg);
+    const angleToAim = cameraShotDir.angleTo(directToAim);
+
+    let finalDir = directToAim;
+    if (angleToAim > maxConvergeRad) {
+      const blend = maxConvergeRad / angleToAim;
+      finalDir = cameraShotDir.clone().lerp(directToAim, blend).normalize();
+    }
+
+    return finalDir.multiplyScalar(weapon.bulletSpeed);
+  }
+
   private setupControls() {
     document.addEventListener("keydown", (e) => this.onKeyDown(e));
     document.addEventListener("keyup", (e) => this.onKeyUp(e));
@@ -730,12 +770,18 @@ export class Player {
     if (this.gamepadIndex === null) return;
     const gp = navigator.getGamepads()[this.gamepadIndex];
     if (!gp) return;
-    const dz = 0.15, moveSens = 0.6, lookSens = 1.0;
-    const ax = (i: number, sens: number) => { const v = gp.axes[i]; return Math.abs(v) > dz ? v * sens : 0; };
-    this.gamepadMove.set(ax(0, moveSens), ax(1, moveSens));
+    const moveDeadzone = 0.15, lookDeadzone = 0.06, moveSens = 0.6, lookSens = 1.0;
+    const applyDeadzone = (value: number, deadzone: number) => {
+      const abs = Math.abs(value);
+      if (abs <= deadzone) return 0;
+      const normalized = (abs - deadzone) / (1 - deadzone);
+      return Math.sign(value) * normalized;
+    };
+    const moveAxis = (i: number, sens: number) => applyDeadzone(gp.axes[i] || 0, moveDeadzone) * sens;
+    this.gamepadMove.set(moveAxis(0, moveSens), moveAxis(1, moveSens));
     const curve = getAimCurve();
-    const rawLookX = Math.abs(gp.axes[2]) > dz ? gp.axes[2] : 0;
-    const rawLookY = Math.abs(gp.axes[3]) > dz ? gp.axes[3] : 0;
+    const rawLookX = applyDeadzone(gp.axes[2] || 0, lookDeadzone);
+    const rawLookY = applyDeadzone(gp.axes[3] || 0, lookDeadzone);
     this.gamepadLook.set(applyAimCurve(rawLookX, curve) * lookSens, applyAimCurve(rawLookY, curve) * lookSens);
     const smoothFactor = 0.3;
     this.gamepadLookSmoothed.x += (this.gamepadLook.x - this.gamepadLookSmoothed.x) * smoothFactor;
@@ -781,7 +827,7 @@ export class Player {
     this.gamepadGrapplePrev = buttonA;
     this.gamepadSprint = Math.hypot(gp.axes[0] || 0, gp.axes[1] || 0) > 0.9;
     this.gamepadFire = rt > 0.5; this.gamepadADS = lt > 0.3;
-    if (this.gamepadLookSmoothed.length() > dz) {
+    if (this.gamepadLookSmoothed.length() > 0.01) {
       const adsMult = (this.mouseADS || this.gamepadADS) ? this.ADS_SENS_MULT : 1.0;
       this.euler.y -= this.gamepadLookSmoothed.x * 0.04 * adsMult;
       this.euler.x -= this.gamepadLookSmoothed.y * 0.03 * adsMult;
@@ -885,14 +931,14 @@ export class Player {
   private shoot() {
     const weapon = this.activeWeapon; const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
     const startPos = this.getWeaponMuzzlePosition(aimDir);
-    const raycaster = new THREE.Raycaster(); raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
-    const intersects = raycaster.intersectObjects(this.getMeshes());
-    const targetPoint = (intersects.length > 0 && intersects[0].distance < 200) ? intersects[0].point : this.camera.position.clone().add(aimDir.clone().multiplyScalar(50));
     const pellets = weapon.bulletsPerShot, isADS = this.isADSActive(), spreadRad = (weapon.spread * (isADS ? 0.3 : 1.0) * Math.PI) / 180;
+    const cameraAimPoint = this.getCameraAimPoint(weapon, aimDir);
     for (let p = 0; p < pellets; p++) {
       const shotDir = this.getShotDirection(weapon, aimDir, spreadRad, p, pellets);
-      const pelletTarget = pellets > 1 ? startPos.clone().add(shotDir.multiplyScalar(weapon.range)) : targetPoint;
-      const velocity = BallisticsSystem.calculateParabolicVelocity(startPos, pelletTarget, weapon.bulletSpeed, Math.abs(weapon.bulletVisuals.gravity), shotDir);
+      const pelletTarget = pellets > 1
+        ? this.camera.position.clone().add(shotDir.clone().multiplyScalar(weapon.range))
+        : cameraAimPoint;
+      const velocity = this.getProjectileVelocity(weapon, startPos, shotDir, pelletTarget, isADS);
       this.bullets.push(this.ballisticsSystem.createBullet(startPos, velocity, weapon.bulletVisuals));
     }
     const recoilMult = isADS ? 0.5 : 1.0;

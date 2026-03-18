@@ -1,5 +1,5 @@
-export type ReticleStyle = 
-  | 'cross' | 'brackets' | 'precision' | 'diamond' | 'chevrons' | 'tshape' | 'circle' | 'ring' | 'corners' | 'three-arm';
+export type ReticleStyle =
+  | 'cross' | 'brackets' | 'precision' | 'diamond' | 'chevrons' | 'tshape' | 'circle' | 'ring' | 'corners' | 'three-arm' | 'titan';
 
 interface ReticleConfig {
   style: ReticleStyle;
@@ -19,7 +19,7 @@ const WEAPON_RETICLES: Record<string, ReticleConfig> = {
   'Mastiff': { style: 'brackets', color: '#88ccff', size: 20, spread: 10 },
   'Wingman': { style: 'circle', color: '#ff6644', size: 18, spread: 3 },
   'L-STAR': { style: 'ring', color: '#22ff44', size: 18, spread: 5 },
-  'XO-16': { style: 'corners', color: '#ff6600', size: 24, spread: 3 },
+  'XO-16': { style: 'titan', color: '#ff6600', size: 30, spread: 3 },
 };
 
 export class ReticleRenderer {
@@ -185,6 +185,9 @@ export class ReticleRenderer {
         break;
       case 'three-arm':
         this.drawThreeArm(ctx, cx, cy, spread, size);
+        break;
+      case 'titan':
+        this.drawTitan(ctx, cx, cy, spread, size);
         break;
     }
   }
@@ -443,6 +446,75 @@ export class ReticleRenderer {
     ctx.beginPath();
     ctx.arc(cx, cy, 3, 0, Math.PI * 2);
     ctx.stroke();
+  }
+
+  // Titan-class targeting system — heavy outer frame, range ticks, center pip
+  private drawTitan(ctx: CanvasRenderingContext2D, cx: number, cy: number, spread: number, size: number): void {
+    const gap = spread + 8;
+    const outer = size + 12;
+    const tick = 6;
+
+    // Outer targeting frame — thick angled corners
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    // Top-left
+    ctx.moveTo(cx - outer, cy - outer + tick * 2);
+    ctx.lineTo(cx - outer, cy - outer);
+    ctx.lineTo(cx - outer + tick * 2, cy - outer);
+    // Top-right
+    ctx.moveTo(cx + outer - tick * 2, cy - outer);
+    ctx.lineTo(cx + outer, cy - outer);
+    ctx.lineTo(cx + outer, cy - outer + tick * 2);
+    // Bottom-right
+    ctx.moveTo(cx + outer, cy + outer - tick * 2);
+    ctx.lineTo(cx + outer, cy + outer);
+    ctx.lineTo(cx + outer - tick * 2, cy + outer);
+    // Bottom-left
+    ctx.moveTo(cx - outer + tick * 2, cy + outer);
+    ctx.lineTo(cx - outer, cy + outer);
+    ctx.lineTo(cx - outer, cy + outer - tick * 2);
+    ctx.stroke();
+
+    // Range tick marks along each axis
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    // Top
+    ctx.moveTo(cx, cy - gap - size);
+    ctx.lineTo(cx, cy - gap);
+    ctx.moveTo(cx - tick, cy - gap - size * 0.5);
+    ctx.lineTo(cx + tick, cy - gap - size * 0.5);
+    // Bottom
+    ctx.moveTo(cx, cy + gap);
+    ctx.lineTo(cx, cy + gap + size);
+    ctx.moveTo(cx - tick, cy + gap + size * 0.5);
+    ctx.lineTo(cx + tick, cy + gap + size * 0.5);
+    // Left
+    ctx.moveTo(cx - gap - size, cy);
+    ctx.lineTo(cx - gap, cy);
+    ctx.moveTo(cx - gap - size * 0.5, cy - tick);
+    ctx.lineTo(cx - gap - size * 0.5, cy + tick);
+    // Right
+    ctx.moveTo(cx + gap, cy);
+    ctx.lineTo(cx + gap + size, cy);
+    ctx.moveTo(cx + gap + size * 0.5, cy - tick);
+    ctx.lineTo(cx + gap + size * 0.5, cy + tick);
+    ctx.stroke();
+
+    // Inner diamond pip
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const d = 4;
+    ctx.moveTo(cx, cy - d);
+    ctx.lineTo(cx + d, cy);
+    ctx.lineTo(cx, cy + d);
+    ctx.lineTo(cx - d, cy);
+    ctx.closePath();
+    ctx.stroke();
+
+    // Center dot
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.5, 0, Math.PI * 2);
+    ctx.fill();
   }
 
 show(): void {

@@ -205,6 +205,7 @@ export class BallisticsSystem {
   ): THREE.Mesh[] {
     return scene.children.filter((o) => {
       if (!(o instanceof THREE.Mesh)) return false;
+      if (o.userData.ignoreRaycast) return false;
       // Exclude owner's parts
       let current: THREE.Object3D | null = o;
       while (current) {

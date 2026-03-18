@@ -439,7 +439,7 @@ export class Player {
   private onEmbarkTitan?: () => void;
   private onDisembarkTitan?: () => void;
   private onPause?: () => void;
-  private onTitanControl?: (forward: number, right: number, lookX: number, lookY: number, fire: boolean, dash: boolean) => void;
+  private onTitanControl?: (forward: number, right: number, lookX: number, lookY: number, fire: boolean, dash: boolean, crouch: boolean) => void;
   private isPilotingTitan = false;
   private gamepadButtonXHoldTime = 0;
   private gamepadMenuPrev = false;
@@ -733,11 +733,17 @@ export class Player {
   setEmbarkTitanCallback(callback: () => void): void { this.onEmbarkTitan = callback; }
   setDisembarkTitanCallback(callback: () => void): void { this.onDisembarkTitan = callback; }
   setPauseCallback(callback: () => void): void { this.onPause = callback; }
-  setTitanControlCallback(callback: (forward: number, right: number, lookX: number, lookY: number, fire: boolean, dash: boolean) => void): void { this.onTitanControl = callback; }
+  setTitanControlCallback(callback: (forward: number, right: number, lookX: number, lookY: number, fire: boolean, dash: boolean, crouch: boolean) => void): void { this.onTitanControl = callback; }
 
   setPilotingState(piloting: boolean): void {
     this.isPilotingTitan = piloting;
     if (!piloting) this.titanMouseLook.set(0, 0);
+    if (piloting) {
+      this.grenadeHeld = false;
+      this.gamepadGrenadeHeld = false;
+    }
+    // Hide/show pilot weapon model so it doesn't render over the titan cockpit weapon
+    if (this.weaponMesh) this.weaponMesh.visible = !piloting;
     const hud = document.getElementById('weapon-hud');
     if (hud) hud.style.display = piloting ? 'none' : '';
     if (piloting) this.reticleRenderer.setWeapon('XO-16'); else this.reticleRenderer.setWeapon(this.activeWeapon.name);
@@ -754,7 +760,7 @@ export class Player {
     const lookX = (this.gamepadLook.x || 0) + this.titanMouseLook.x;
     const lookY = (this.gamepadLook.y || 0) + this.titanMouseLook.y;
     this.titanMouseLook.set(0, 0);
-    this.onTitanControl(-localZ, localX, lookX, lookY, this.keys.fire || this.gamepadFire, this.keys.sprint || this.gamepadTitanDash);
+    this.onTitanControl(-localZ, localX, lookX, lookY, this.keys.fire || this.gamepadFire, this.keys.sprint || this.gamepadTitanDash, this.keys.crouch || this.gamepadCrouch);
   }
 
   syncToTitan(position: THREE.Vector3, yaw: number): void {
@@ -798,13 +804,18 @@ export class Player {
     const buttonA = gp.buttons[0]?.pressed ?? false, buttonB = gp.buttons[1]?.pressed ?? false, buttonY = gp.buttons[3]?.pressed ?? false;
     if (buttonY && !this.gamepadReloadPrev) this.switchWeapon(this.weaponManager.nextWeapon());
     this.gamepadReloadPrev = buttonY;
-    if (buttonB && !this.gamepadGrenadePrev) this.gamepadGrenadeHeld = true;
-    if (!buttonB && this.gamepadGrenadeHeld) { this.gamepadGrenadeHeld = false; this.throwGrenade(); }
+    if (this.isPilotingTitan) {
+      this.gamepadGrenadeHeld = false;
+    } else {
+      if (buttonB && !this.gamepadGrenadePrev) this.gamepadGrenadeHeld = true;
+      if (!buttonB && this.gamepadGrenadeHeld) { this.gamepadGrenadeHeld = false; this.throwGrenade(); }
+    }
     this.gamepadGrenadePrev = buttonB;
     if (lb && !this.gamepadJumpPrev) this.jumpJustPressed = true;
     this.gamepadJumpPrev = lb;
-    if (rb && !this.gamepadCrouchPrev) this.crouchJustPressed = true;
-    this.gamepadCrouchPrev = rb; this.gamepadCrouch = rb;
+    const crouchPressed = this.isPilotingTitan ? buttonB : rb;
+    if (crouchPressed && !this.gamepadCrouchPrev) this.crouchJustPressed = true;
+    this.gamepadCrouchPrev = crouchPressed; this.gamepadCrouch = crouchPressed;
     if (buttonX) {
       if (this.gamepadButtonXHoldTime === 0) { this.hasTriggeredEmbark = false; this.suppressInteractRelease = false; }
       if (!this.isDisembarking) {
@@ -850,7 +861,7 @@ export class Player {
 
   update(delta: number, targets?: any[], enemies?: any[]) {
     this.pollGamepad();
-    if (this.isPilotingTitan) { this.updateTitanControls(); this.handleShooting(delta, targets, enemies, false); this.updateGrenades(delta, targets, enemies); return; }
+    if (this.isPilotingTitan) { this.updateTitanControls(); this.handleShooting(delta, targets, enemies, false); this.updateGrenades(delta, targets, enemies); this.reticleRenderer.setSpread(0); this.reticleRenderer.render(); this.reticleRenderer.show(); return; }
     if (this.keys.embark) {
       const holdDuration = (performance.now() - this.keyboardEmbarkStartTime) / 1000;
       const timeSinceEmbark = (performance.now() - this.lastEmbarkTime) / 1000;

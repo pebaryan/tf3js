@@ -9,6 +9,8 @@ export interface HUDUpdateData {
   playerHealth: number;
   titanDashMeter: number;
   isPilotingTitan: boolean;
+  titanHealth: number;
+  titanShield: number;
   capturePoints: { captured: boolean }[];
   capturedTime: number;
   checkpoints: { completed: boolean }[];
@@ -34,6 +36,10 @@ export class GameUI {
   private leftStickUpPrev = false;
   private leftStickDownPrev = false;
   private lastMenuState: GameState = GameState.MAIN_MENU;
+
+  // Titan visor state
+  private _wasPiloting = false;
+  private visorOverlay: HTMLElement | null = null;
 
   // Controls (keybind editor) state
   private isControlsOpen = false;
@@ -63,13 +69,15 @@ export class GameUI {
     visorOverlay.style.cssText = `
       position: absolute;
       inset: 0;
-      background: 
+      background:
         radial-gradient(circle at center, transparent 50%, rgba(0, 20, 20, 0.4) 100%),
         repeating-linear-gradient(rgba(0, 255, 204, 0.03) 0, rgba(0, 255, 204, 0.03) 1px, transparent 1px, transparent 4px);
       pointer-events: none;
       z-index: 10;
+      transition: background 0.4s ease;
     `;
     visor.appendChild(visorOverlay);
+    this.visorOverlay = visorOverlay;
 
     // HUD Content Wrapper (The curved part)
     const hud = document.createElement('div');
@@ -234,6 +242,54 @@ export class GameUI {
     `;
     healthLabel.textContent = 'VITALS // SYSTEM STABLE';
     hudLeft.appendChild(healthLabel);
+    this.hudElements['healthLabel'] = healthLabel;
+    this.hudElements['healthBar'] = healthBar;
+    this.hudElements['healthContainer'] = healthContainer;
+
+    // Titan shield bar (shown only when piloting titan)
+    const shieldContainer = document.createElement('div');
+    shieldContainer.id = 'shield-container';
+    shieldContainer.style.cssText = `
+      position: absolute;
+      bottom: 70px;
+      left: 0;
+      width: 200px;
+      height: 14px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(100, 180, 255, 0.5);
+      clip-path: polygon(0 0, 95% 0, 99% 100%, 0 100%);
+      padding: 2px;
+      display: none;
+    `;
+    hudLeft.appendChild(shieldContainer);
+    this.hudElements['shieldContainer'] = shieldContainer;
+
+    const shieldBar = document.createElement('div');
+    shieldBar.id = 'shield-bar';
+    shieldBar.style.cssText = `
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #4488ff, #88ccff);
+      box-shadow: 0 0 10px rgba(68, 136, 255, 0.4);
+      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    `;
+    shieldContainer.appendChild(shieldBar);
+    this.hudElements['shieldBar'] = shieldBar;
+
+    const shieldLabel = document.createElement('div');
+    shieldLabel.style.cssText = `
+      position: absolute;
+      bottom: 88px;
+      left: 5px;
+      font-size: 10px;
+      color: #4488ff;
+      letter-spacing: 1px;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 8px #000;
+      display: none;
+    `;
+    shieldLabel.textContent = 'SHIELD MATRIX';
+    hudLeft.appendChild(shieldLabel);
+    this.hudElements['shieldLabel'] = shieldLabel;
 
     // Titan meter container
     const titanContainer = document.createElement('div');
@@ -349,6 +405,7 @@ export class GameUI {
     `;
     debugLabel.textContent = 'PILOT TELEMETRY';
     debugPanel.appendChild(debugLabel);
+    this.hudElements['debugLabel'] = debugLabel;
 
     const debugState = document.createElement('div');
     debugState.id = 'debug-state';
@@ -424,6 +481,7 @@ export class GameUI {
     `;
     weaponLabel.textContent = 'ARMAMENT STATUS';
     weaponPanel.appendChild(weaponLabel);
+    this.hudElements['weaponLabel'] = weaponLabel;
 
     const weaponName = document.createElement('div');
     weaponName.id = 'weapon-name';
@@ -706,20 +764,137 @@ export class GameUI {
     this.buildControlsOverlay();
   }
 
+  private applyVisorTheme(titan: boolean): void {
+    // Visor overlay
+    if (this.visorOverlay) {
+      this.visorOverlay.style.background = titan
+        ? `radial-gradient(circle at center, transparent 40%, rgba(20, 10, 0, 0.55) 100%),
+           repeating-linear-gradient(rgba(255, 140, 0, 0.04) 0, rgba(255, 140, 0, 0.04) 1px, transparent 1px, transparent 3px)`
+        : `radial-gradient(circle at center, transparent 50%, rgba(0, 20, 20, 0.4) 100%),
+           repeating-linear-gradient(rgba(0, 255, 204, 0.03) 0, rgba(0, 255, 204, 0.03) 1px, transparent 1px, transparent 4px)`;
+    }
+
+    const accent = titan ? '#ff6600' : '#00ffcc';
+    const accentRgba = titan ? 'rgba(255, 102, 0,' : 'rgba(0, 255, 204,';
+
+    // Level info
+    const levelInfo = this.hudElements['level-info'];
+    if (levelInfo) {
+      levelInfo.style.background = `linear-gradient(90deg, ${accentRgba} 0.1), transparent)`;
+      levelInfo.style.borderLeftColor = accent;
+    }
+
+    // Timer
+    const timer = this.hudElements['timer'];
+    if (timer) timer.style.borderBottomColor = accent;
+
+    // Stats
+    const stats = this.hudElements['stats'];
+    if (stats) stats.style.borderLeftColor = accent;
+
+    // Health bar area
+    const healthContainer = this.hudElements['healthContainer'];
+    if (healthContainer) {
+      healthContainer.style.borderColor = titan ? 'rgba(255, 102, 0, 0.5)' : 'rgba(0, 255, 204, 0.5)';
+    }
+    const healthBar = this.hudElements['healthBar'];
+    if (healthBar) {
+      healthBar.style.background = titan
+        ? 'linear-gradient(90deg, #ff6600, #cc4400)'
+        : 'linear-gradient(90deg, #00ffcc, #008866)';
+      healthBar.style.boxShadow = titan
+        ? '0 0 15px rgba(255, 102, 0, 0.4)'
+        : '0 0 15px rgba(0, 255, 204, 0.4)';
+    }
+    const healthLabel = this.hudElements['healthLabel'];
+    if (healthLabel) {
+      healthLabel.textContent = titan ? 'HULL INTEGRITY' : 'VITALS // SYSTEM STABLE';
+      healthLabel.style.color = accent;
+    }
+
+    // Shield bar (titan only)
+    const shieldContainer = this.hudElements['shieldContainer'];
+    if (shieldContainer) shieldContainer.style.display = titan ? 'block' : 'none';
+    const shieldLabel = this.hudElements['shieldLabel'];
+    if (shieldLabel) shieldLabel.style.display = titan ? 'block' : 'none';
+
+    // Titan meter (hide when piloting — you're already in the titan)
+    const titanContainer = document.getElementById('titan-container');
+    if (titanContainer) titanContainer.style.display = titan ? 'none' : 'block';
+    const titanLabel = this.hudElements['titanLabel'];
+    if (titanLabel) titanLabel.style.display = titan ? 'none' : 'block';
+
+    // Debug panel
+    const debugPanel = this.hudElements['debugPanel'];
+    if (debugPanel) {
+      debugPanel.style.borderRightColor = titan ? 'rgba(255, 160, 60, 0.7)' : 'rgba(102, 255, 214, 0.7)';
+      debugPanel.style.borderTopColor = titan ? 'rgba(255, 160, 60, 0.25)' : 'rgba(102, 255, 214, 0.25)';
+      debugPanel.style.borderBottomColor = titan ? 'rgba(255, 160, 60, 0.2)' : 'rgba(102, 255, 214, 0.2)';
+      debugPanel.style.background = titan
+        ? 'linear-gradient(270deg, rgba(0, 0, 0, 0.64), rgba(36, 18, 0, 0.2))'
+        : 'linear-gradient(270deg, rgba(0, 0, 0, 0.64), rgba(0, 28, 36, 0.2))';
+      debugPanel.style.boxShadow = titan ? '0 0 16px rgba(255, 102, 0, 0.1)' : '0 0 16px rgba(0, 255, 204, 0.1)';
+    }
+    const debugLabel = this.hudElements['debugLabel'];
+    if (debugLabel) {
+      debugLabel.textContent = titan ? 'TITAN OS v3.2' : 'PILOT TELEMETRY';
+      debugLabel.style.color = titan ? 'rgba(255, 200, 140, 0.7)' : 'rgba(180, 255, 240, 0.7)';
+    }
+    const debugState = this.hudElements['debugState'];
+    if (debugState) debugState.style.color = titan ? '#ffcc88' : '#8affea';
+    const debugSpeed = this.hudElements['debugSpeed'];
+    if (debugSpeed) debugSpeed.style.color = titan ? '#fff0e0' : '#f5fffd';
+    const debugVelocity = this.hudElements['debugVelocity'];
+    if (debugVelocity) debugVelocity.style.color = titan ? 'rgba(255, 220, 180, 0.78)' : 'rgba(220, 255, 250, 0.78)';
+
+    // Weapon panel
+    const weaponPanel = this.hudElements['weaponPanel'];
+    if (weaponPanel) {
+      weaponPanel.style.borderRightColor = titan ? '#ff6600' : '#00ffcc';
+      weaponPanel.style.borderTopColor = titan ? 'rgba(255, 102, 0, 0.25)' : 'rgba(0, 255, 204, 0.25)';
+      weaponPanel.style.borderBottomColor = titan ? 'rgba(255, 102, 0, 0.25)' : 'rgba(0, 255, 204, 0.25)';
+      weaponPanel.style.background = titan
+        ? 'linear-gradient(270deg, rgba(0, 0, 0, 0.68), rgba(48, 24, 0, 0.18))'
+        : 'linear-gradient(270deg, rgba(0, 0, 0, 0.68), rgba(0, 48, 40, 0.18))';
+    }
+    const weaponLabel = this.hudElements['weaponLabel'];
+    if (weaponLabel) {
+      weaponLabel.textContent = titan ? 'TITAN ARMAMENT' : 'ARMAMENT STATUS';
+      weaponLabel.style.color = titan ? 'rgba(255, 200, 140, 0.7)' : 'rgba(180, 255, 240, 0.7)';
+    }
+
+    // Dash container accent
+    const dashContainer = this.hudElements['titanDashContainer'];
+    if (dashContainer) {
+      dashContainer.style.borderColor = titan ? 'rgba(255, 160, 60, 0.4)' : 'rgba(102, 204, 255, 0.4)';
+    }
+    const dashBar = this.hudElements['titanDashBar'];
+    if (dashBar) dashBar.style.background = titan ? '#ff8844' : '#66ccff';
+    const dashLabel = this.hudElements['titanDashLabel'];
+    if (dashLabel) dashLabel.style.color = titan ? '#ff8844' : '#66ccff';
+  }
+
   updateHUD(data: HUDUpdateData): void {
     const { currentLevel, stats, scoreMultiplier, playerHealth,
-            titanDashMeter, isPilotingTitan,
+            titanDashMeter, isPilotingTitan, titanHealth, titanShield,
             capturePoints, capturedTime, checkpoints, checkpointProgress,
             enemyCount, destroyedTargets, showSniperScope, weapon, debug } = data;
 
-    this.hudElements['level-info'].innerHTML = `
-      <strong>LEVEL ${currentLevel.id}</strong><br>
-      ${currentLevel.name}
-    `;
+    // Theme switch on state change
+    if (isPilotingTitan !== this._wasPiloting) {
+      this._wasPiloting = isPilotingTitan;
+      this.applyVisorTheme(isPilotingTitan);
+    }
+
+    const accent = isPilotingTitan ? '#ff6600' : '#00ffcc';
+
+    this.hudElements['level-info'].innerHTML = isPilotingTitan
+      ? `<strong>TITAN ACTIVE</strong><br>${currentLevel.name}`
+      : `<strong>LEVEL ${currentLevel.id}</strong><br>${currentLevel.name}`;
 
     this.hudElements['score'].innerHTML = `
       SCORE: ${stats.score}
-      <span style="color: #00ffff; font-size: 12px;">×${scoreMultiplier.toFixed(1)}</span>
+      <span style="color: ${isPilotingTitan ? '#ffaa44' : '#00ffff'}; font-size: 12px;">&times;${scoreMultiplier.toFixed(1)}</span>
     `;
 
     this.hudElements['objective'].innerHTML = currentLevel.objective;
@@ -728,7 +903,7 @@ export class GameUI {
       const remaining = Math.max(0, currentLevel.timeLimit - stats.time);
       this.hudElements['timer'].innerHTML = `
         TIME: ${Math.floor(remaining)}s
-        <span style="color: ${remaining < 10 ? '#ff0000' : '#00ffcc'}; font-size: 12px;">
+        <span style="color: ${remaining < 10 ? '#ff0000' : accent}; font-size: 12px;">
           ${Math.floor(stats.time)}s elapsed
         </span>
       `;
@@ -736,24 +911,33 @@ export class GameUI {
       this.hudElements['timer'].innerHTML = `TIME: ${Math.floor(stats.time)}s`;
     }
 
-    const healthBar = document.getElementById('health-bar');
-    if (healthBar) healthBar.style.width = `${playerHealth}%`;
+    // Health: show titan hull when piloting, pilot health otherwise
+    const healthBar = this.hudElements['healthBar'];
+    if (healthBar) healthBar.style.width = `${isPilotingTitan ? titanHealth : playerHealth}%`;
 
-    const titanBar = document.getElementById('titan-bar');
-    const titanLabel = document.getElementById('titan-label');
-    if (titanBar) titanBar.style.width = `${stats.titanMeter}%`;
-    if (titanLabel) {
-      if (stats.titanMeter >= 100) {
-        titanLabel.textContent = 'TITAN READY [T]';
-        titanLabel.style.color = '#ffff00';
-        titanLabel.style.textShadow = '0 0 10px #ffff00';
-      } else {
-        titanLabel.textContent = 'TITAN';
-        titanLabel.style.color = '#ff6600';
-        titanLabel.style.textShadow = '0 0 5px #ff6600';
+    // Shield bar (titan only)
+    const shieldBar = this.hudElements['shieldBar'];
+    if (shieldBar) shieldBar.style.width = `${titanShield}%`;
+
+    // Titan call meter (hidden when piloting)
+    if (!isPilotingTitan) {
+      const titanBar = document.getElementById('titan-bar');
+      const titanLabel = document.getElementById('titan-label');
+      if (titanBar) titanBar.style.width = `${stats.titanMeter}%`;
+      if (titanLabel) {
+        if (stats.titanMeter >= 100) {
+          titanLabel.textContent = 'TITAN READY [T]';
+          titanLabel.style.color = '#ffff00';
+          titanLabel.style.textShadow = '0 0 10px #ffff00';
+        } else {
+          titanLabel.textContent = 'TITAN';
+          titanLabel.style.color = '#ff6600';
+          titanLabel.style.textShadow = '0 0 5px #ff6600';
+        }
       }
     }
 
+    // Dash meter (titan only)
     const dashContainer = this.hudElements['titanDashContainer'];
     const dashBar = this.hudElements['titanDashBar'];
     const dashLabel = this.hudElements['titanDashLabel'];
@@ -764,18 +948,18 @@ export class GameUI {
       dashBar.style.filter = titanDashMeter < 40 ? 'saturate(1.8) brightness(1.2)' : 'none';
     }
 
+    // Debug / telemetry
     const debugState = this.hudElements['debugState'];
-    if (debugState) debugState.textContent = debug.movementState;
+    if (debugState) debugState.textContent = isPilotingTitan ? 'PILOTING' : debug.movementState;
 
     const debugSpeed = this.hudElements['debugSpeed'];
     if (debugSpeed) debugSpeed.textContent = `${debug.speed.toFixed(1)}`;
 
     const debugVelocity = this.hudElements['debugVelocity'];
     if (debugVelocity) {
-      debugVelocity.innerHTML = `
-        VEL ${debug.velocity.x.toFixed(1)} / ${debug.velocity.y.toFixed(1)} / ${debug.velocity.z.toFixed(1)}<br>
-        JUMPS ${debug.jumpCount}
-      `;
+      debugVelocity.innerHTML = isPilotingTitan
+        ? `HULL ${Math.round(titanHealth)}%<br>SHIELD ${Math.round(titanShield)}%`
+        : `VEL ${debug.velocity.x.toFixed(1)} / ${debug.velocity.y.toFixed(1)} / ${debug.velocity.z.toFixed(1)}<br>JUMPS ${debug.jumpCount}`;
     }
 
     const debugFlags = this.hudElements['debugFlags'];
@@ -791,102 +975,147 @@ export class GameUI {
         ">${label}</span>
       `;
 
-      debugFlags.innerHTML = [
-        renderFlag('SPRINT', debug.sprinting, '#66ff99'),
-        renderFlag('CROUCH', debug.crouching, '#ffaa55'),
-      ].join('');
+      debugFlags.innerHTML = isPilotingTitan
+        ? [
+            renderFlag('DASH', titanDashMeter >= 40, '#ff8844'),
+            renderFlag('SHIELD', titanShield > 0, '#4488ff'),
+          ].join('')
+        : [
+            renderFlag('SPRINT', debug.sprinting, '#66ff99'),
+            renderFlag('CROUCH', debug.crouching, '#ffaa55'),
+          ].join('');
     }
 
+    // Weapon panel
     const weaponPanel = this.hudElements['weaponPanel'];
-    if (weaponPanel) {
+    if (weaponPanel && isPilotingTitan) {
+      weaponPanel.style.borderRightColor = '#ff6600';
+      weaponPanel.style.boxShadow = '0 0 18px rgba(255, 102, 0, 0.13)';
+    } else if (weaponPanel) {
       weaponPanel.style.borderRightColor = weapon.accentColor;
       weaponPanel.style.boxShadow = `0 0 18px ${weapon.accentColor}22`;
     }
 
     const weaponName = this.hudElements['weaponName'];
     if (weaponName) {
-      weaponName.textContent = weapon.weaponName;
-      weaponName.style.color = weapon.accentColor;
+      weaponName.textContent = isPilotingTitan ? 'XO-16 Chaingun' : weapon.weaponName;
+      weaponName.style.color = isPilotingTitan ? '#ff8844' : weapon.accentColor;
     }
 
     const ammoCount = this.hudElements['ammoCount'];
     if (ammoCount) {
-      ammoCount.textContent = weapon.isReloading ? 'RLD' : `${weapon.ammo}`;
-      ammoCount.style.color = weapon.isReloading
-        ? '#ffaa00'
-        : weapon.ammo === 0
-          ? '#ff5555'
-          : '#f5fffd';
+      if (isPilotingTitan) {
+        ammoCount.textContent = '\u221E';
+        ammoCount.style.color = '#fff0e0';
+      } else {
+        ammoCount.textContent = weapon.isReloading ? 'RLD' : `${weapon.ammo}`;
+        ammoCount.style.color = weapon.isReloading
+          ? '#ffaa00'
+          : weapon.ammo === 0
+            ? '#ff5555'
+            : '#f5fffd';
+      }
     }
 
     const ammoMeta = this.hudElements['ammoMeta'];
     if (ammoMeta) {
-      const percent = Math.round(weapon.reloadProgress * 100);
-      ammoMeta.innerHTML = weapon.isReloading
-        ? `RELOADING<br>${percent}%`
-        : `MAG ${weapon.magazineSize}<br>LIVE ROUNDS`;
+      if (isPilotingTitan) {
+        ammoMeta.innerHTML = 'INFINITE MAG<br>AUTO-FEED';
+      } else {
+        const percent = Math.round(weapon.reloadProgress * 100);
+        ammoMeta.innerHTML = weapon.isReloading
+          ? `RELOADING<br>${percent}%`
+          : `MAG ${weapon.magazineSize}<br>LIVE ROUNDS`;
+      }
     }
 
     const ammoBar = this.hudElements['ammoBar'];
     if (ammoBar) {
-      const ammoRatio = weapon.magazineSize > 0 ? weapon.ammo / weapon.magazineSize : 0;
-      ammoBar.style.width = `${Math.max(0, Math.min(100, ammoRatio * 100))}%`;
-      ammoBar.style.background = weapon.isReloading
-        ? 'linear-gradient(90deg, #ffaa00, #ffe08a)'
-        : `linear-gradient(90deg, ${weapon.accentColor}, #f5fffd)`;
+      if (isPilotingTitan) {
+        ammoBar.style.width = '100%';
+        ammoBar.style.background = 'linear-gradient(90deg, #ff6600, #ffaa44)';
+      } else {
+        const ammoRatio = weapon.magazineSize > 0 ? weapon.ammo / weapon.magazineSize : 0;
+        ammoBar.style.width = `${Math.max(0, Math.min(100, ammoRatio * 100))}%`;
+        ammoBar.style.background = weapon.isReloading
+          ? 'linear-gradient(90deg, #ffaa00, #ffe08a)'
+          : `linear-gradient(90deg, ${weapon.accentColor}, #f5fffd)`;
+      }
     }
 
     const ammoPips = this.hudElements['ammoPips'];
     if (ammoPips) {
-      const pipCount = Math.min(Math.max(weapon.magazineSize, 1), 24);
-      const filledPips = weapon.isReloading
-        ? Math.max(1, Math.round(weapon.reloadProgress * pipCount))
-        : Math.round((weapon.ammo / Math.max(weapon.magazineSize, 1)) * pipCount);
-      ammoPips.innerHTML = Array.from({ length: pipCount }, (_, index) => {
-        const active = index < filledPips;
-        const color = weapon.isReloading ? '#ffaa00' : weapon.accentColor;
-        return `<span style="
-          display:block;
-          height:6px;
-          background:${active ? color : 'rgba(255,255,255,0.08)'};
-          box-shadow:${active ? `0 0 8px ${color}66` : 'none'};
-          opacity:${active ? '1' : '0.45'};
-        "></span>`;
-      }).join('');
+      if (isPilotingTitan) {
+        ammoPips.innerHTML = '';
+      } else {
+        const pipCount = Math.min(Math.max(weapon.magazineSize, 1), 24);
+        const filledPips = weapon.isReloading
+          ? Math.max(1, Math.round(weapon.reloadProgress * pipCount))
+          : Math.round((weapon.ammo / Math.max(weapon.magazineSize, 1)) * pipCount);
+        ammoPips.innerHTML = Array.from({ length: pipCount }, (_, index) => {
+          const active = index < filledPips;
+          const color = weapon.isReloading ? '#ffaa00' : weapon.accentColor;
+          return `<span style="
+            display:block;
+            height:6px;
+            background:${active ? color : 'rgba(255,255,255,0.08)'};
+            box-shadow:${active ? `0 0 8px ${color}66` : 'none'};
+            opacity:${active ? '1' : '0.45'};
+          "></span>`;
+        }).join('');
+      }
     }
 
     const weaponSlots = this.hudElements['weaponSlots'];
     if (weaponSlots) {
-      weaponSlots.innerHTML = weapon.weaponSlots.map((slot) => `
-        <div style="
-          display:flex;
-          justify-content:space-between;
-          color:${slot.active ? weapon.accentColor : 'rgba(200, 230, 230, 0.55)'};
-          border-right:${slot.active ? `2px solid ${weapon.accentColor}` : '2px solid transparent'};
-          padding-right:8px;
-        ">
-          <span>0${slot.index + 1}</span>
-          <span>${slot.name}</span>
-        </div>
-      `).join('');
+      if (isPilotingTitan) {
+        weaponSlots.innerHTML = `
+          <div style="display:flex;justify-content:space-between;color:#ff8844;border-right:2px solid #ff6600;padding-right:8px;">
+            <span>01</span><span>XO-16 Chaingun</span>
+          </div>`;
+      } else {
+        weaponSlots.innerHTML = weapon.weaponSlots.map((slot) => `
+          <div style="
+            display:flex;
+            justify-content:space-between;
+            color:${slot.active ? weapon.accentColor : 'rgba(200, 230, 230, 0.55)'};
+            border-right:${slot.active ? `2px solid ${weapon.accentColor}` : '2px solid transparent'};
+            padding-right:8px;
+          ">
+            <span>0${slot.index + 1}</span>
+            <span>${slot.name}</span>
+          </div>
+        `).join('');
+      }
     }
 
     const weaponAttachments = this.hudElements['weaponAttachments'];
     if (weaponAttachments) {
-      weaponAttachments.innerHTML = weapon.attachments.length > 0
-        ? `MODS // ${weapon.attachments.join(' // ')}`
-        : 'MODS // STOCK CONFIG';
+      weaponAttachments.innerHTML = isPilotingTitan
+        ? 'SYS // TITAN-CLASS ORDNANCE'
+        : weapon.attachments.length > 0
+          ? `MODS // ${weapon.attachments.join(' // ')}`
+          : 'MODS // STOCK CONFIG';
     }
 
     const weaponUtility = this.hudElements['weaponUtility'];
     if (weaponUtility) {
-      weaponUtility.innerHTML = `
-        <div style="color:${weapon.grenadeCount > 0 ? '#88cc88' : '#ff5555'};">FRAG ${weapon.grenadeCount}</div>
-        <div style="color:${weapon.grappleColor};">GRAPPLE ${weapon.grappleLabel}</div>
-        <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);margin-top:4px;">
-          <div style="width:${Math.max(0, Math.min(100, weapon.grappleProgress * 100))}%;height:100%;background:${weapon.grappleColor};transition:width 0.1s linear;"></div>
-        </div>
-      `;
+      if (isPilotingTitan) {
+        weaponUtility.innerHTML = `
+          <div style="color:#ff8844;">DASH ${Math.round(titanDashMeter)}%</div>
+          <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);margin-top:4px;">
+            <div style="width:${Math.max(0, Math.min(100, titanDashMeter))}%;height:100%;background:#ff8844;transition:width 0.1s linear;"></div>
+          </div>
+        `;
+      } else {
+        weaponUtility.innerHTML = `
+          <div style="color:${weapon.grenadeCount > 0 ? '#88cc88' : '#ff5555'};">FRAG ${weapon.grenadeCount}</div>
+          <div style="color:${weapon.grappleColor};">GRAPPLE ${weapon.grappleLabel}</div>
+          <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);margin-top:4px;">
+            <div style="width:${Math.max(0, Math.min(100, weapon.grappleProgress * 100))}%;height:100%;background:${weapon.grappleColor};transition:width 0.1s linear;"></div>
+          </div>
+        `;
+      }
     }
 
     let statsText = '';
@@ -1351,31 +1580,10 @@ export class GameUI {
     }
   }
 
-showPilotingIndicator(show: boolean): void {
-    // Check if indicator exists, create if not
-    let indicator = document.getElementById('piloting-indicator');
-    if (!indicator && show) {
-      indicator = document.createElement('div');
-      indicator.id = 'piloting-indicator';
-      indicator.style.cssText = `
-        position: absolute;
-        top: 20%;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 32px;
-        color: #00ffcc;
-        text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 20px rgba(0, 0, 0, 1);
-        background: rgba(0, 0, 0, 0.8);
-        padding: 20px 40px;
-        border: 3px solid #00ffcc;
-        border-radius: 10px;
-        z-index: 300;
-        text-align: center;
-        font-family: 'Orbitron', sans-serif;
-      `;
-    }
-    if (indicator) {
-      indicator.style.display = show ? 'block' : 'none';
-    }
+  showPilotingIndicator(_show: boolean): void {
+    // Titan visor is now handled entirely by the HUD theme switcher in updateHUD/applyVisorTheme.
+    // Remove the old floating overlay if it still exists.
+    const old = document.getElementById('piloting-indicator');
+    if (old) old.remove();
   }
 }

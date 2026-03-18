@@ -297,31 +297,36 @@ export class Game {
 
   disembarkTitan(): void {
     if (!this.player || !this.titan) return;
-    
+
     // Only disembark if currently piloting
     if (this.titan.state !== TitanState.PILOTING) return;
-    
-    // Exit the titan
+
+    // Set callback for when fade-out completes (screen is black)
+    this.titan.setExitFadedOutCallback(() => {
+      if (!this.player || !this.titan) return;
+
+      // Position player near the titan when exiting
+      const titanPos = this.titan.group.position.clone();
+      const exitOffset = new THREE.Vector3(0, 0, 4).applyAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        this.titan.group.rotation.y
+      );
+      this.player.body.position.set(
+        titanPos.x + exitOffset.x,
+        titanPos.y + 0.5,
+        titanPos.z + exitOffset.z
+      );
+
+      // Show player model again and disable piloting mode
+      this.player.group.visible = true;
+      this.player.setPilotingState(false);
+
+      // Reset player velocity with slight upward boost (ejection)
+      this.player.setVelocity(exitOffset.x * 2, 5, exitOffset.z * 2);
+    });
+
+    // Start the exit sequence (fade out → callback → fade in)
     this.titan.exit();
-    
-    // Position player near the titan when exiting
-    const titanPos = this.titan.group.position.clone();
-    const exitOffset = new THREE.Vector3(0, 0, 4).applyAxisAngle(
-      new THREE.Vector3(0, 1, 0),
-      this.titan.group.rotation.y
-    );
-    this.player.body.position.set(
-      titanPos.x + exitOffset.x,
-      titanPos.y + 0.5,
-      titanPos.z + exitOffset.z
-    );
-    
-    // Show player model again and disable piloting mode
-    this.player.group.visible = true;
-    this.player.setPilotingState(false);
-    
-    // Reset player velocity with slight upward boost (ejection)
-    this.player.setVelocity(exitOffset.x * 2, 5, exitOffset.z * 2);
   }
 
   private createTitanCallAnimation(position: THREE.Vector3): void {
@@ -402,7 +407,7 @@ export class Game {
     this.stats.kills = 0;
     this.stats.time = 0;
     this.stats.objectivesCompleted = 0;
-    this.stats.titanMeter = 0;
+    this.stats.titanMeter = 100;
     this.stats.health = 100;
     this.levelStartTime = Date.now();
     this.scoreMultiplier = 1;
@@ -451,9 +456,9 @@ export class Game {
     this.player.setPauseCallback(() => {
       this.togglePause();
     });
-    this.player.setTitanControlCallback((forward, right, lookX, lookY, fire, dash) => {
+    this.player.setTitanControlCallback((forward, right, lookX, lookY, fire, dash, crouch) => {
       if (this.titan) {
-        this.titan.setPilotInput(forward, right, lookX, lookY, fire, dash);
+        this.titan.setPilotInput(forward, right, lookX, lookY, fire, dash, crouch);
       }
     });
     this.scene.add(this.player.group);
@@ -626,6 +631,8 @@ export class Game {
     if (this.titan) {
       this.titan.update(delta, this.targets, this.enemies);
       this.titan.updatePhysicsPosition();
+      let titanCockpitActive = false;
+      let titanAds = false;
 
       // Check if player is near titan and can embark, or if piloting
       if (this.player) {
@@ -650,17 +657,28 @@ export class Game {
           const cockpit = this.titan.getCockpitCamera();
           this.camera.position.copy(cockpit.position);
           this.camera.rotation.set(cockpit.rotation.x, cockpit.rotation.y, cockpit.rotation.z, 'YXZ');
+          titanAds = this.player.isADSActive();
+          const targetFov = titanAds ? 58 : 75;
+          this.camera.fov += (targetFov - this.camera.fov) * 0.18;
+          this.camera.updateProjectionMatrix();
+          titanCockpitActive = true;
+        } else {
+          this.titan.hideCockpitWeapon();
         }
       } else {
         this.ui.showEmbarkIndicator(false);
         this.ui.showPilotingIndicator(false);
         this.lastEmbarkIndicatorState = false;
+        this.titan.hideCockpitWeapon();
       }
 
       const shakeIntensity = this.titan.getShakeIntensity();
       if (shakeIntensity > 0.01) {
         this.camera.position.x += (Math.random() - 0.5) * shakeIntensity * 0.3;
         this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
+      }
+      if (titanCockpitActive) {
+        this.titan.syncCockpitWeapon(this.camera, titanAds, delta);
       }
     } else {
       this.ui.showEmbarkIndicator(false);
@@ -1119,6 +1137,8 @@ export class Game {
     const isPilotingTitan = !!this.titan &&
       (this.titan.state === TitanState.PILOTING || this.titan.state === TitanState.ENTERING);
     const titanDashMeter = this.titan ? this.titan.getDashMeter() : 100;
+    const titanHealth = this.titan ? this.titan.getHealth() : 0;
+    const titanShield = this.titan ? this.titan.getShield() : 0;
     this.ui.updateHUD({
       currentLevel: this.currentLevel,
       stats: this.stats,
@@ -1126,6 +1146,8 @@ export class Game {
       playerHealth: this.player.health,
       titanDashMeter,
       isPilotingTitan,
+      titanHealth,
+      titanShield,
       capturePoints: this.capturePoints,
       capturedTime: this.capturedTime,
       checkpoints: this.checkpoints,

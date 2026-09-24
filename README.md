@@ -17,6 +17,8 @@ Click the image above to watch a gameplay demo on YouTube.
 - **Enemy AI** that patrols, chases, strafes, flanks, seeks cover and leads its shots
 - **Six missions** across training, capture, race and survival modes
 - **Rebindable keys** and full **gamepad** support (menus and gameplay), with selectable aim response curves
+- **Modern rendering**: HDR post-processing with bloom, MSAA/FXAA, ground-truth ambient occlusion (Ultra), image-based lighting from the sky, camera-following soft shadows, dynamic muzzle-flash/explosion lights and hit-feedback colour grading
+- **Graphics quality presets** (Low / Medium / High / Ultra) in **Configurations**
 
 ## Controls
 
@@ -99,6 +101,9 @@ src/
 ├── weapons.ts       # Weapon/attachment definitions and WeaponManager
 ├── ballistics.ts    # Projectile simulation and trails
 ├── collision.ts     # Pure collision/damage helpers and scene disposal
+├── graphics.ts      # Render pipeline: post-processing, shadows, IBL, flash lights
+├── graphicsSettings.ts # Graphics quality presets
+├── geometryUtils.ts # Bevelled boxes and geometry merging
 ├── effects.ts       # Impacts, muzzle flashes, explosions
 ├── reticle.ts       # Per-weapon crosshairs and hitmarkers
 ├── radar.ts         # Enemy radar and damage-direction indicators

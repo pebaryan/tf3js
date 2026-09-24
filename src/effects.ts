@@ -1,4 +1,10 @@
 import * as THREE from 'three';
+import { flashLight } from './graphics';
+
+/** Colour boosted above 1.0 so additive effects exceed the bloom threshold and glow. */
+function hdr(hex: number, intensity: number): THREE.Color {
+  return new THREE.Color(hex).multiplyScalar(intensity);
+}
 
 export type EffectType = 'impact' | 'muzzle' | 'shockwave' | 'debris';
 
@@ -253,6 +259,33 @@ interface MeshParticle {
   gravity: number;
   life: number;
   maxLife: number;
+  /** Scale at spawn; particles shrink to nothing instead of fading (their material is shared). */
+  baseScale: number;
+}
+
+/*
+ * Sparks and debris are spawned by the dozen on every hit, so they share unit
+ * geometries and per-colour materials; only transforms change per particle.
+ */
+const particleGeometries = {
+  spark: new THREE.CylinderGeometry(0.5, 0.5, 4, 4), // unit streak, scaled by spark size
+  debris: new THREE.SphereGeometry(1, 6, 4),
+};
+const particleMaterials = new Map<string, THREE.MeshBasicMaterial>();
+
+function particleMaterial(hex: number, intensity: number): THREE.MeshBasicMaterial {
+  const key = `${hex}:${intensity}`;
+  let mat = particleMaterials.get(key);
+  if (!mat) {
+    mat = new THREE.MeshBasicMaterial({
+      color: hdr(hex, intensity),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    particleMaterials.set(key, mat);
+  }
+  return mat;
 }
 
 interface MeshFlash {
@@ -282,11 +315,12 @@ export class ImpactEffectsRenderer {
       config.flashSegments,
     );
     const flashMat = new THREE.MeshBasicMaterial({
-      color: config.flashColor,
+      color: hdr(config.flashColor, 4),
       transparent: true,
       opacity: config.flashOpacity,
       side: THREE.DoubleSide,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
     const flash = new THREE.Mesh(flashGeo, flashMat);
     flash.position.copy(point).add(n.clone().multiplyScalar(config.flashNormalOffset));
@@ -301,14 +335,8 @@ export class ImpactEffectsRenderer {
     for (let i = 0; i < sparkCount; i++) {
       const size = config.sparkMinSize + Math.random() * (config.sparkMaxSize - config.sparkMinSize);
       // Elongated streak for sparks
-      const sparkGeo = new THREE.CylinderGeometry(size * 0.5, size * 0.5, size * 4, 4);
-      const sparkMat = new THREE.MeshBasicMaterial({
-        color: config.sparkColor,
-        transparent: true,
-        opacity: 1,
-        depthWrite: false,
-      });
-      const spark = new THREE.Mesh(sparkGeo, sparkMat);
+      const spark = new THREE.Mesh(particleGeometries.spark, particleMaterial(config.sparkColor, 5));
+      spark.scale.setScalar(size);
       spark.position.copy(point);
       spark.userData.ignoreRaycast = true;
 
@@ -331,6 +359,7 @@ export class ImpactEffectsRenderer {
         gravity: config.sparkGravity,
         life: config.sparkLifeMin + Math.random() * (config.sparkLifeMax - config.sparkLifeMin),
         maxLife: config.sparkMaxLife,
+        baseScale: size,
       });
     }
   }
@@ -348,13 +377,10 @@ export class ImpactEffectsRenderer {
         p.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), p.velocity.clone().normalize());
       }
 
-      p.mesh.scale.multiplyScalar(0.98);
-      (p.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, p.life / p.maxLife);
+      p.mesh.scale.setScalar(p.baseScale * Math.max(0, p.life / p.maxLife));
 
       if (p.life <= 0) {
         this.scene.remove(p.mesh);
-        p.mesh.geometry.dispose();
-        (p.mesh.material as THREE.Material).dispose();
         this.particles.splice(i, 1);
       }
     }
@@ -378,27 +404,32 @@ export class ImpactEffectsRenderer {
   spawnMuzzleFlash(position: THREE.Vector3, direction: THREE.Vector3, config: MuzzleFlashConfig): void {
     const geo = new THREE.SphereGeometry(config.radius, 8, 8);
     const mat = new THREE.MeshBasicMaterial({
-      color: config.color,
+      color: hdr(config.color, 6),
       transparent: true,
       opacity: 0.9,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(position).add(direction.clone().multiplyScalar(0.3));
     mesh.userData.ignoreRaycast = true;
     this.scene.add(mesh);
     this.flashes.push({ mesh, life: config.life, maxLife: config.life });
+    // Brief light so the muzzle flash actually illuminates nearby surfaces
+    flashLight(mesh.position, config.color, 8, 7, 0.07);
   }
 
   spawnExplosion(position: THREE.Vector3, config: ExplosionConfig): void {
     // Core flash sphere
     const coreGeo = new THREE.SphereGeometry(config.coreRadius, 12, 12);
     const coreMat = new THREE.MeshBasicMaterial({
-      color: config.coreColor,
+      color: hdr(config.coreColor, 8),
       transparent: true,
       opacity: 0.95,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
+    flashLight(position, config.coreColor, 50, 16, 0.35);
     const core = new THREE.Mesh(coreGeo, coreMat);
     core.position.copy(position);
     core.userData.ignoreRaycast = true;
@@ -408,11 +439,12 @@ export class ImpactEffectsRenderer {
     // Shockwave ring
     const ringGeo = new THREE.RingGeometry(config.shockwaveRadius, config.shockwaveRadius * 1.5, 24);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: config.shockwaveColor,
+      color: hdr(config.shockwaveColor, 3),
       transparent: true,
       opacity: 0.7,
       side: THREE.DoubleSide,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
     const ring = new THREE.Mesh(ringGeo, ringMat);
     ring.position.copy(position);
@@ -425,14 +457,8 @@ export class ImpactEffectsRenderer {
     // Debris particles
     for (let i = 0; i < config.debrisCount; i++) {
       const size = config.debrisMinSize + Math.random() * (config.debrisMaxSize - config.debrisMinSize);
-      const geo = new THREE.SphereGeometry(size, 4, 4);
-      const mat = new THREE.MeshBasicMaterial({
-        color: config.debrisColor,
-        transparent: true,
-        opacity: 1,
-        depthWrite: false,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
+      const mesh = new THREE.Mesh(particleGeometries.debris, particleMaterial(config.debrisColor, 4));
+      mesh.scale.setScalar(size);
       mesh.position.copy(position);
       mesh.userData.ignoreRaycast = true;
 
@@ -452,15 +478,15 @@ export class ImpactEffectsRenderer {
         gravity: config.debrisGravity,
         life: config.debrisLife,
         maxLife: config.debrisLife,
+        baseScale: size,
       });
     }
   }
 
   disposeAll(): void {
+    // Particle geometry/materials are shared; only detach the meshes
     for (const p of this.particles) {
       this.scene.remove(p.mesh);
-      p.mesh.geometry.dispose();
-      (p.mesh.material as THREE.Material).dispose();
     }
     this.particles = [];
 

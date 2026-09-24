@@ -33,6 +33,9 @@ src/
 ├── weapons.ts     # Weapon definitions, cloneWeapon, WeaponManager
 ├── ballistics.ts  # Projectile simulation
 ├── collision.ts   # Pure collision/damage helpers, disposeObject3D
+├── graphics.ts    # Render pipeline: post-processing, sun shadows, IBL, flash lights
+├── graphicsSettings.ts # Quality presets (low/medium/high/ultra) + persistence
+├── geometryUtils.ts    # bevelBox, placedBox, mergeAndDispose
 ├── effects.ts     # Impact/explosion particle effects
 ├── reticle.ts     # Crosshair canvas
 ├── radar.ts       # Radar / damage-direction canvas
@@ -52,6 +55,12 @@ src/
 - Weapon constants (`R201_WEAPON`, ...) are shared templates — never mutate them. `WeaponManager` stores copies via `cloneWeapon()`.
 - Fast projectiles must be hit-tested along the segment travelled this frame (`segmentIntersectsSphere`, `Player.findSegmentHit`), not just at their new position, or they tunnel through targets.
 - Game time (`stats.time`) accumulates simulated `delta`, so pausing doesn't count against level time limits.
+- **Rendering**: never call `renderer.render()` directly — `GraphicsPipeline.render()` runs the post-processing chain (MSAA/FXAA, bloom, GTAO on ultra, colour grade, tone mapping). Tone mapping and sRGB conversion happen in the final `OutputPass`.
+- **Glow**: bloom only picks up HDR values (threshold ≈ 2.4 luminance, above sunlit white walls). Make something glow with an HDR colour, e.g. `new THREE.Color(hex).multiplyScalar(4)` on a `MeshBasicMaterial`, or a high `emissiveIntensity`.
+- **Canvas textures** that carry colour must set `texture.colorSpace = THREE.SRGBColorSpace`.
+- **Dynamic lights**: use `flashLight()` from `graphics.ts` for muzzle flashes/explosions. It uses a fixed pool, so the scene's light count never changes (which would recompile every shader).
+- **Geometry**: use `bevelBox()` instead of `BoxGeometry` for visible hard-surface parts. Decorative detail on level blocks is added as *children* (merged per material via `mergeAndDispose`) so gameplay raycasts, which only test top-level scene meshes, and physics are unaffected.
+- **Per-frame allocation**: projectiles and particles share cached geometries/materials and only update transforms. Don't create geometries or materials per bullet/particle, and don't dispose shared ones in `disposeBullet`.
 
 ## Gamepad Support
 

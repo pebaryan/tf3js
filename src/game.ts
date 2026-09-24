@@ -11,6 +11,8 @@ import { GameUI } from './ui';
 import { Weapon, Attachment, ATTACHMENTS, cloneWeapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
 import { getBindings, keyCodeToLabel } from './keybindings';
 import { disposeObject3D } from './collision';
+import { GraphicsPipeline } from './graphics';
+import { GraphicsQuality, getGraphicsQuality, setGraphicsQuality } from './graphicsSettings';
 
 interface WeaponPickup {
   weapon: Weapon;
@@ -80,6 +82,11 @@ export class Game {
   /** Scene objects that survive level changes (camera, lights). */
   private persistentObjects = new Set<THREE.Object3D>();
   private ui: GameUI;
+  private graphics!: GraphicsPipeline;
+  private sunDirection = new THREE.Vector3(-40, 60, -50).normalize();
+  /** Health seen last frame, to trigger hit feedback when it drops. */
+  private lastPilotHealth = 100;
+  private lastTitanHealth = 0;
 
   private capturedTime = 0;
   private checkpointProgress = 0;
@@ -138,7 +145,8 @@ export class Game {
     this.initScene();
     this.ui.init(
       () => { if (this.state === GameState.PLAYING || this.state === GameState.PAUSED) this.togglePause(); },
-      () => { if (this.state === GameState.PLAYING) this.callTitan(); }
+      () => { if (this.state === GameState.PLAYING) this.callTitan(); },
+      (quality: GraphicsQuality) => this.setGraphicsQuality(quality)
     );
 
     // Clicking the canvas re-captures the mouse if pointer lock was lost
@@ -169,40 +177,33 @@ export class Game {
     this.camera.position.set(0, 2, 0);
     this.scene.add(this.camera);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Anti-aliasing is done in the post-processing chain (MSAA render target or FXAA)
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.4; // Boosted for simulation look
+    this.renderer.toneMappingExposure = 0.95;
     this.gameContainer.appendChild(this.renderer.domElement);
 
-    // Sky dome
-    this.createSkyDome();
+    this.graphics = new GraphicsPipeline(this.renderer, this.scene, this.camera, getGraphicsQuality());
 
-    // Hemisphere light: bright sky blue and clear neutral bounce
-    const hemiLight = new THREE.HemisphereLight(0xbadcf5, 0xffffff, 0.9);
+    // Sky dome, also used as the image-based lighting environment
+    const sky = this.createSkyDome();
+    this.graphics.setEnvironmentFromEquirect(sky, 0.4);
+
+    // Soft sky fill. Most ambient light now comes from the sky environment map.
+    const hemiLight = new THREE.HemisphereLight(0xbadcf5, 0xe8eef2, 0.45);
     this.scene.add(hemiLight);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.2); // Lower ambient for better shadows
-    this.scene.add(ambientLight);
-
-    // Sun-like directional light — very bright, clear simulation sun
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 2.2); // Stronger directional for contrast
-    directionalLight.position.set(-40, 60, -50);
+    // Sun: casts the shadows. Its shadow frustum follows the camera (see GraphicsPipeline.updateSun)
+    const directionalLight = new THREE.DirectionalLight(0xfff4e6, 2.6);
+    directionalLight.position.copy(this.sunDirection).multiplyScalar(90);
     directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 2048;
-    directionalLight.shadow.mapSize.height = 2048;
-    directionalLight.shadow.camera.near = 10;
-    directionalLight.shadow.camera.far = 200;
-    directionalLight.shadow.camera.left = -50;
-    directionalLight.shadow.camera.right = 50;
-    directionalLight.shadow.camera.top = 50;
-    directionalLight.shadow.camera.bottom = -50;
     this.scene.add(directionalLight);
+    this.graphics.setSun(directionalLight);
 
-    this.persistentObjects = new Set<THREE.Object3D>([this.camera, hemiLight, ambientLight, directionalLight]);
+    this.persistentObjects = new Set<THREE.Object3D>([this.camera, hemiLight, directionalLight, directionalLight.target]);
 
     this.world = new CANNON.World();
     this.world.gravity.set(0, 0, 0);
@@ -210,11 +211,13 @@ export class Game {
     window.addEventListener('resize', () => this.onWindowResize());
   }
 
-  private createSkyDome() {
+  private createSkyDome(): THREE.Texture {
     const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 512;
+    canvas.width = 2048;
+    canvas.height = 1024;
     const ctx = canvas.getContext('2d')!;
+    // Authored in 1024x512 units; scaled up for a sharper background
+    ctx.scale(2, 2);
 
     // Gradient: bright cyan/teal horizon → light blue → white zenith
     const grad = ctx.createLinearGradient(0, 512, 0, 0);
@@ -226,14 +229,18 @@ export class Game {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 1024, 512);
 
-    // Subtle digital grid in the sky
-    ctx.strokeStyle = 'rgba(0, 255, 204, 0.15)';
+    // Subtle digital grid in the sky, fading out overhead where equirect lines bunch into arcs
+    const gridFade = ctx.createLinearGradient(0, 512, 0, 0);
+    gridFade.addColorStop(0.5, 'rgba(0, 255, 204, 0.14)');
+    gridFade.addColorStop(0.72, 'rgba(0, 255, 204, 0.04)');
+    gridFade.addColorStop(0.85, 'rgba(0, 255, 204, 0)');
+    ctx.strokeStyle = gridFade;
     ctx.lineWidth = 1;
     const gridSpacing = 64;
     for (let x = 0; x <= 1024; x += gridSpacing) {
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 512); ctx.stroke();
     }
-    for (let y = 0; y <= 512; y += gridSpacing) {
+    for (let y = 128; y <= 512; y += gridSpacing) {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(1024, y); ctx.stroke();
     }
 
@@ -256,9 +263,38 @@ export class Game {
       ctx.fill();
     }
 
+    // Sun glow, placed where the directional light actually comes from (equirectangular mapping)
+    const sun = this.sunDirection;
+    const u = Math.atan2(sun.z, sun.x) / (Math.PI * 2) + 0.5;
+    const v = Math.asin(THREE.MathUtils.clamp(sun.y, -1, 1)) / Math.PI + 0.5;
+    const sunX = u * 1024;
+    const sunY = (1 - v) * 512;
+    const stretch = 1 / Math.max(0.2, Math.cos(Math.asin(sun.y))); // equirect widens towards the poles
+    ctx.save();
+    ctx.translate(sunX, sunY);
+    ctx.scale(stretch, 1);
+    const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, 90);
+    halo.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    halo.addColorStop(0.08, 'rgba(255, 252, 240, 1)');
+    halo.addColorStop(0.25, 'rgba(255, 244, 220, 0.55)');
+    halo.addColorStop(1, 'rgba(255, 240, 220, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(0, 0, 90, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
     const texture = new THREE.CanvasTexture(canvas);
     texture.mapping = THREE.EquirectangularReflectionMapping;
+    texture.colorSpace = THREE.SRGBColorSpace;
     this.scene.background = texture;
+    return texture;
+  }
+
+  private setGraphicsQuality(quality: GraphicsQuality): void {
+    if (quality === this.graphics.getQuality()) return;
+    setGraphicsQuality(quality);
+    this.graphics.setQuality(quality);
   }
 
   callTitan(): void {
@@ -398,6 +434,8 @@ export class Game {
     this.activePickupHoldTime = 0;
 
     this.teardownLevel();
+    this.lastPilotHealth = 100;
+    this.lastTitanHealth = 0;
 
     createLevel(this.scene, this.world, this.currentLevel);
 
@@ -460,7 +498,7 @@ export class Game {
     }
 
     for (const child of [...this.scene.children]) {
-      if (this.persistentObjects.has(child)) continue;
+      if (this.persistentObjects.has(child) || this.graphics.getPersistentObjects().includes(child)) continue;
       this.scene.remove(child);
       disposeObject3D(child);
     }
@@ -1184,7 +1222,24 @@ export class Game {
   onWindowResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.graphics.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  /** Screen feedback (edge flash, desaturation, cockpit tint) driven by pilot/titan health. */
+  private updateScreenFeedback(): void {
+    const titan = this.titan;
+    const piloting = !!titan && titan.state === TitanState.PILOTING;
+    this.graphics.setTitanView(piloting);
+
+    const pilotHealth = this.player.health;
+    if (pilotHealth < this.lastPilotHealth) this.graphics.registerDamage(this.lastPilotHealth - pilotHealth);
+    this.lastPilotHealth = pilotHealth;
+
+    const titanHealth = titan ? titan.getHealth() + titan.getShield() : 0;
+    if (piloting && titanHealth < this.lastTitanHealth) this.graphics.registerDamage((this.lastTitanHealth - titanHealth) * 0.5);
+    this.lastTitanHealth = titanHealth;
+
+    this.graphics.setHealthFraction(piloting && titan ? titan.getHealth() / 100 : pilotHealth / 100);
   }
 
   animate() {
@@ -1192,11 +1247,14 @@ export class Game {
     const delta = Math.min(this.clock.getDelta(), 0.05);
     if (this.state === GameState.PLAYING) {
       this.update(delta);
+      this.updateScreenFeedback();
+      this.graphics.update(delta, this.camera.position);
     } else {
       this.ui.updateMenuNavigation(this.state);
+      this.graphics.update(0, this.camera.position);
     }
 
-    this.renderer.render(this.scene, this.camera);
+    this.graphics.render();
     requestAnimationFrame(() => this.animate());
   }
 }

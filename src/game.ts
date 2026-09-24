@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { Target } from './target';
-import { Enemy } from './enemy';
+import { Grunt } from './grunt';
+import { Tick } from './tick';
+import { Reaper } from './reaper';
+import { Hostile, HostileContext } from './hostile';
+import { ImpactEffectsRenderer } from './effects';
 import { createLevel, updateLevelVisuals } from './level';
 import { LevelType, Level, LEVELS } from './levels';
 import { Player, createWeaponMesh } from './player';
@@ -48,8 +52,6 @@ const CAPTURE_WIN_TIME = 30;
 const CAPTURE_RADIUS = 3;
 const CHECKPOINT_RADIUS = 4;
 const TITAN_EMBARK_RANGE = 3;
-/** Enemy bullet damage applied to the pilot (titan hull takes the same, shields first). */
-const ENEMY_BULLET_DAMAGE = 8;
 const PLAYER_HITBOX_RADIUS = 0.5;
 
 export class Game {
@@ -60,7 +62,13 @@ export class Game {
   world!: CANNON.World;
   clock!: THREE.Clock;
   targets: Target[] = [];
-  enemies: Enemy[] = [];
+  /** Every AI hostile (grunts, ticks, reapers), including ones playing a death animation. */
+  enemies: Hostile[] = [];
+  /** World-space effects owned by the level (enemy impacts, explosions), independent of who spawned them. */
+  private worldEffects: ImpactEffectsRenderer | null = null;
+  private reapersSpawned = 0;
+  private scoredKills = new WeakSet<Hostile>();
+  private nextSquadId = 1;
   capturePoints: CapturePoint[] = [];
   checkpoints: Checkpoint[] = [];
   titan: Titan | null = null;
@@ -484,6 +492,8 @@ export class Game {
     this.targets = [];
     this.enemies.forEach((enemy) => enemy.dispose());
     this.enemies = [];
+    this.worldEffects?.disposeAll();
+    this.worldEffects = null;
     this.capturePoints = [];
     this.checkpoints = [];
     this.weaponPickups = [];
@@ -611,7 +621,7 @@ export class Game {
     });
   }
 
-  /** Starting enemy positions per level type (feet on the ground, y = 0). */
+  /** Starting grunt positions per level type (feet on the ground, y = 0). */
   private getEnemySpawnPositions(type: LevelType): THREE.Vector3[] {
     switch (type) {
       case LevelType.SURVIVAL:
@@ -634,20 +644,53 @@ export class Game {
     }
   }
 
+  /** Dormant tick positions per level type. */
+  private getTickSpawnPositions(type: LevelType): THREE.Vector3[] {
+    switch (type) {
+      case LevelType.SURVIVAL:
+        return [new THREE.Vector3(-14, 0, -40), new THREE.Vector3(14, 0, -40), new THREE.Vector3(-6, 0, -48), new THREE.Vector3(6, 0, -48)];
+      case LevelType.CAPTURE:
+        return [new THREE.Vector3(-4, 0, 36), new THREE.Vector3(4, 0, 36)];
+      case LevelType.RACE:
+        return [new THREE.Vector3(8, 0, -30), new THREE.Vector3(-8, 0, -52), new THREE.Vector3(4, 0, -75)];
+      default:
+        return [];
+    }
+  }
+
+  private addHostile(hostile: Hostile): void {
+    this.enemies.push(hostile);
+  }
+
+  private spawnGrunt(position: THREE.Vector3, squadId: number, aggressive = true, difficulty = 0.3 + Math.random() * 0.4): void {
+    this.addHostile(new Grunt(this.scene, position, { health: 50, difficulty, squadId, aggressive }));
+  }
+
   private setupEnemies() {
     const level = this.currentLevel!;
+    this.reapersSpawned = 0;
+
+    // Grunts in squads of up to three
     const positions = this.getEnemySpawnPositions(level.type);
+    let squad = this.nextSquadId++;
     for (let i = 0; i < level.enemyCount && positions.length > 0; i++) {
-      const position = positions[i % positions.length].clone();
-      const diff = 0.3 + Math.random() * 0.4; // 0.3-0.7
-      this.enemies.push(new Enemy(this.scene, this.world, position, {
-        health: 50,
-        speed: 1.5,
-        aggressive: level.type !== LevelType.RACE,
-        attackCooldown: 2,
-        difficulty: diff,
-      }));
+      if (i > 0 && i % 3 === 0) squad = this.nextSquadId++;
+      this.spawnGrunt(positions[i % positions.length].clone(), squad, level.type !== LevelType.RACE);
     }
+
+    const ticks = this.getTickSpawnPositions(level.type);
+    for (let i = 0; i < (level.tickCount ?? 0) && ticks.length > 0; i++) {
+      this.addHostile(new Tick(this.scene, ticks[i % ticks.length].clone()));
+    }
+
+    for (let i = 0; i < (level.reaperCount ?? 0); i++) this.spawnReaper();
+  }
+
+  private spawnReaper(): void {
+    // Far end of the survival arena, alternating flanks (the central corridors split the arena)
+    const x = this.reapersSpawned % 2 === 0 ? 12 : -12;
+    this.addHostile(new Reaper(this.scene, new THREE.Vector3(x, 0, -50)));
+    this.reapersSpawned++;
   }
 
   update(delta: number) {
@@ -657,13 +700,14 @@ export class Game {
     this.world.step(1 / 60, delta, 4);
 
     this.player.update(delta, this.targets, this.enemies);
+    this.worldEffects?.update(delta);
     this.targets.forEach(target => target.update(delta, this.camera.position));
 
     // Update level-specific visuals (like pulsing neon strips)
     updateLevelVisuals(performance.now() * 0.001);
 
     // Update radar with enemy positions
-    this.player.updateRadar(this.enemies.map(e => ({ position: e.group.position })));
+    this.player.updateRadar(this.enemies.filter((e) => !e.isDead()).map((e) => ({ position: e.group.position })));
     this.player.renderRadar();
 
     this.updateObjectives(delta);
@@ -1001,38 +1045,51 @@ export class Game {
         break;
 
       case LevelType.SURVIVAL: {
-        // Reinforcements arrive faster the longer you survive
-        const maxEnemies = this.currentLevel!.enemyCount * 2;
-        const spawnInterval = Math.max(3, 8 - this.stats.time / 10);
+        // Reinforcements arrive faster the longer you survive, escalating from grunts to ticks to reapers
+        const level = this.currentLevel!;
+        const alive = this.enemies.filter((e) => !e.isDead());
+        const maxAlive = level.enemyCount * 2 + 4;
+        const spawnInterval = Math.max(3.5, 8 - this.stats.time / 10);
         this.survivalSpawnTimer += delta;
         if (this.survivalSpawnTimer >= spawnInterval) {
           this.survivalSpawnTimer = 0;
-          if (this.enemies.length < maxEnemies) this.spawnEnemy();
+          if (alive.length < maxAlive) this.spawnWave(alive);
         }
         break;
       }
     }
   }
 
-  private spawnEnemy() {
+  private spawnWave(alive: Hostile[]): void {
+    const t = this.stats.time;
+    const reapersAlive = alive.filter((e) => e.kind === 'reaper').length;
+    const reaperBudget = (this.currentLevel!.reaperCount ?? 0) + Math.floor(Math.max(0, t - 30) / 40) + (t > 30 ? 1 : 0);
+    if (reapersAlive === 0 && this.reapersSpawned < reaperBudget) {
+      this.spawnReaper();
+      return;
+    }
+
     // Arena corners, inside the survival walls
-    const spawnPoints = [
-      new THREE.Vector3(15, 0, -50),
-      new THREE.Vector3(-15, 0, -50),
-      new THREE.Vector3(15, 0, -5),
-      new THREE.Vector3(-15, 0, -5)
+    const corners = [
+      new THREE.Vector3(15, 0, -50), new THREE.Vector3(-15, 0, -50),
+      new THREE.Vector3(15, 0, -5), new THREE.Vector3(-15, 0, -5),
     ];
+    const corner = corners[Math.floor(Math.random() * corners.length)];
+    const jitter = () => corner.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0, (Math.random() - 0.5) * 3));
 
-    const point = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
-
-    const diff = 0.3 + Math.random() * 0.5;
-    this.enemies.push(new Enemy(this.scene, this.world, point.clone(), {
-      health: 50,
-      speed: 1.5 + Math.random() * 1.0,
-      aggressive: true,
-      attackCooldown: 2 + Math.random() * 2,
-      difficulty: diff,
-    }));
+    if (t > 18 && Math.random() < 0.4) {
+      // Tick pack: they wake immediately and rush in
+      for (let i = 0; i < 3; i++) {
+        const tick = new Tick(this.scene, jitter());
+        tick.takeDamage(0);
+        this.addHostile(tick);
+      }
+    } else {
+      // Grunt fireteam, tougher as time goes on
+      const squad = this.nextSquadId++;
+      const difficulty = Math.min(0.9, 0.35 + t / 150);
+      for (let i = 0; i < 2; i++) this.spawnGrunt(jitter(), squad, true, difficulty);
+    }
   }
 
   /** Opaque, raycastable level geometry (used for line-of-sight and bullet collision). */
@@ -1048,8 +1105,6 @@ export class Game {
 
   private updateEnemies(delta: number) {
     const playerPos = this.player.group.position;
-    const worldMeshes = this.getWorldMeshes();
-    const playerVel = this.player.getVelocity();
     const hitbox = { center: playerPos.clone().add(new THREE.Vector3(0, 0.5, 0)), radius: PLAYER_HITBOX_RADIUS };
     const piloting = this.isPiloting();
     if (piloting && this.titan) {
@@ -1057,26 +1112,44 @@ export class Game {
       hitbox.center.copy(this.titan.group.position).add(new THREE.Vector3(0, 5, 0));
       hitbox.radius = 3;
     }
-    const aimPos = piloting ? hitbox.center : playerPos;
+    if (!this.worldEffects) this.worldEffects = new ImpactEffectsRenderer(this.scene);
+
+    const spawned: Hostile[] = [];
+    const ctx: HostileContext = {
+      delta,
+      target: hitbox.center,
+      targetVelocity: this.player.getVelocity(),
+      targetIsTitan: piloting,
+      hitbox,
+      worldMeshes: this.getWorldMeshes(),
+      hostiles: this.enemies,
+      effects: this.worldEffects,
+      spawn: (h) => spawned.push(h),
+    };
 
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const enemy = this.enemies[i];
 
-      // AI update: state machine, movement, shooting
-      const hits = enemy.update(delta, aimPos, worldMeshes, hitbox, playerVel);
-      for (const source of hits) {
-        if (piloting && this.titan) this.titan.takeDamage(ENEMY_BULLET_DAMAGE);
-        else this.player.takeDamage(ENEMY_BULLET_DAMAGE, source);
+      // AI update: state machine, movement, attacks
+      for (const hit of enemy.update(ctx)) {
+        if (piloting && this.titan) this.titan.takeDamage(hit.damage);
+        else this.player.takeDamage(hit.damage, hit.source);
       }
 
-      // Check enemy death
-      if (enemy.health <= 0) {
+      // Score each kill exactly once, whoever caused it (player, titan, a tick blast)
+      if (enemy.isDead() && !this.scoredKills.has(enemy)) {
+        this.scoredKills.add(enemy);
+        if (enemy.scoreValue > 0) {
+          this.addScore(enemy.scoreValue);
+          this.stats.kills++;
+        }
+      }
+      if (enemy.isFinished()) {
         enemy.dispose();
         this.enemies.splice(i, 1);
-        this.addScore(100);
-        this.stats.kills++;
       }
     }
+    this.enemies.push(...spawned);
   }
 
   addScore(amount: number) {
@@ -1175,7 +1248,7 @@ export class Game {
       capturedTime: this.capturedTime,
       checkpoints: this.checkpoints,
       checkpointProgress: this.checkpointProgress,
-      enemyCount: this.enemies.length,
+      enemyCount: this.enemies.filter((e) => !e.isDead()).length,
       destroyedTargets: this.countDestroyedTargets(),
       showSniperScope: this.player.shouldShowSniperScope(),
       weapon: this.player.getWeaponHUDData(),

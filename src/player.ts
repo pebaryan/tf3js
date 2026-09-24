@@ -437,6 +437,9 @@ export class Player {
 
   health = 100;
   titanMeter = 0;
+  private timeSinceDamage = 0;
+  private readonly REGEN_DELAY = 4;
+  private readonly REGEN_RATE = 25;
   private lastShotTime = 0;
   private bullets: Bullet[] = [];
   private grenades: Grenade[] = [];
@@ -985,6 +988,7 @@ export class Player {
 
   update(delta: number, targets: Damageable[] = [], enemies: Damageable[] = []) {
     this.pollGamepad();
+    this.regenerateHealth(delta);
     if (this.isPilotingTitan) { this.updateTitanControls(); this.handleShooting(delta, targets, enemies, false); this.updateGrenades(delta, targets, enemies); this.reticleRenderer.setSpread(0); this.reticleRenderer.render(); this.reticleRenderer.show(); return; }
     if (this.keys.embark) {
       const holdDuration = (performance.now() - this.keyboardEmbarkStartTime) / 1000;
@@ -1101,8 +1105,17 @@ export class Player {
 
   takeDamage(amount: number, sourcePosition?: THREE.Vector3) {
     if (this.health <= 0) return;
+    this.timeSinceDamage = 0;
     this.health = Math.max(0, this.health - amount); soundManager.playSound('hit', 0.5);
     if (sourcePosition) this.radarRenderer.showDamageDirection(sourcePosition, this.group.position, this.euler.y);
+  }
+
+  /** Titanfall-style pilot regen: after a few seconds out of harm's way, health recovers quickly. */
+  private regenerateHealth(delta: number): void {
+    this.timeSinceDamage += delta;
+    if (this.health > 0 && this.health < 100 && this.timeSinceDamage >= this.REGEN_DELAY) {
+      this.health = Math.min(100, this.health + this.REGEN_RATE * delta);
+    }
   }
 
   updateRadar(enemies: { position: THREE.Vector3; velocity?: THREE.Vector3 }[]): void { this.radarRenderer.updateEnemies(enemies, this.group.position, this.euler.y); }

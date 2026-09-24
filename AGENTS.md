@@ -29,7 +29,10 @@ src/
 ├── types.ts       # Shared types: GameState enum, GameStats, Damageable, HUD data
 ├── titan.ts       # Titan entity logic (states, piloting, weapons)
 ├── titanModel.ts  # Titan geometry, rig and two-bone leg IK
-├── enemy.ts       # Enemy entity logic
+├── hostile.ts     # Hostile interface/context shared by all AI enemies + steering/cover helpers
+├── grunt.ts       # Grunt: squad rifleman AI (cover, peek, reload, flee titans)
+├── tick.ts        # Tick: suicide drone AI + model
+├── reaper.ts      # Reaper: bipedal robot AI (rockets, stomp, tick launcher) + model
 ├── target.ts      # Destructible target entities
 ├── weapons.ts     # Weapon definitions, cloneWeapon, WeaponManager
 ├── ballistics.ts  # Projectile simulation
@@ -61,6 +64,7 @@ src/
 - **Canvas textures** that carry colour must set `texture.colorSpace = THREE.SRGBColorSpace`.
 - **Dynamic lights**: use `flashLight()` from `graphics.ts` for muzzle flashes/explosions. It uses a fixed pool, so the scene's light count never changes (which would recompile every shader).
 - **Geometry**: use `bevelBox()` instead of `BoxGeometry` for visible hard-surface parts. Decorative detail on level blocks is added as *children* (merged per material via `mergeAndDispose`) so gameplay raycasts, which only test top-level scene meshes, and physics are unaffected.
+- **Enemies** implement `Hostile` (`hostile.ts`). `Game.updateEnemies()` builds one `HostileContext` per frame (target, hitbox, world meshes, shared `worldEffects`, `spawn`); hostiles return `HostileHit`s and never touch the player/titan directly, so damage routes to whichever the player is in. Dead hostiles stay in `Game.enemies` until `isFinished()` (death animations); kills are scored once via `scoredKills`. New enemy types: implement `Hostile`, add spawns in `Game`.
 - **Per-frame allocation**: projectiles and particles share cached geometries/materials and only update transforms. Don't create geometries or materials per bullet/particle, and don't dispose shared ones in `disposeBullet`.
 
 ## Gamepad Support

@@ -10,25 +10,34 @@ Browser-based 3D first-person shooter inspired by Titanfall, built with Three.js
 npm run dev      # Start dev server (http://localhost:5173)
 npm run build    # tsc + vite build → dist/
 npm run preview  # Preview production build
+npm test         # Unit tests (Vitest, *.test.ts next to the source)
 ```
 
-Always run `npm run build` to verify there are no TypeScript errors after making changes.
+Always run `npm run build` and `npm test` to verify there are no TypeScript errors or test failures after making changes.
 
 ## Architecture
 
 ```
 src/
-├── main.ts      # Entry point — creates Game, wires keydown shortcuts
-├── game.ts      # Core game loop, state machine, physics world, orchestration
-├── player.ts    # Player controller: movement, parkour, shooting, camera
-├── ui.ts        # All DOM/HUD creation, menu management, gamepad navigation
-├── level.ts     # Map geometry builder (createLevel)
-├── levels.ts    # Level data: LevelType enum, Level interface, LEVELS array
-├── types.ts     # Shared types: GameState enum, GameStats interface
-├── titan.ts     # Titan entity logic
-├── enemy.ts     # Enemy entity logic
-├── target.ts    # Destructible target entities
-└── sound.ts     # Audio management (currently commented out in game.ts)
+├── main.ts        # Entry point — creates Game, wires restart/menu shortcut keys
+├── game.ts        # Core game loop, state machine, level setup/teardown, objectives
+├── player.ts      # Player controller: input, shooting, grapple, grenades, camera
+├── movement.ts    # Pilot movement physics (ground, slide, wall run, mantle)
+├── ui.ts          # All DOM/HUD creation, menu management, gamepad navigation
+├── level.ts       # Map geometry builder (createLevel)
+├── levels.ts      # Level data: LevelType enum, Level interface, LEVELS array
+├── types.ts       # Shared types: GameState enum, GameStats, Damageable, HUD data
+├── titan.ts       # Titan entity logic
+├── enemy.ts       # Enemy entity logic
+├── target.ts      # Destructible target entities
+├── weapons.ts     # Weapon definitions, cloneWeapon, WeaponManager
+├── ballistics.ts  # Projectile simulation
+├── collision.ts   # Pure collision/damage helpers, disposeObject3D
+├── effects.ts     # Impact/explosion particle effects
+├── reticle.ts     # Crosshair canvas
+├── radar.ts       # Radar / damage-direction canvas
+├── keybindings.ts # Rebindable keys and aim curves (persisted in localStorage)
+└── sound.ts       # Procedurally synthesised audio
 ```
 
 ## Key Conventions
@@ -39,6 +48,10 @@ src/
 - `GameUI.init()` accepts callbacks (`onTogglePause`, `onCallTitan`) rather than holding a reference to `Game`, keeping `ui.ts` decoupled.
 - Physics body velocity is set directly on `body.velocity` (Cannon-es Vector3), not via forces, for responsive player movement.
 - Wall run: `wallNormal` is set by `checkWall()` raycasts (left/right). Movement is projected onto the wall tangent plane to prevent camera-look direction from pulling the player off the wall.
+- **Lifecycle**: every level restart goes through `Game.teardownLevel()`. Anything that registers DOM listeners, appends DOM elements or allocates GPU resources must expose `dispose()`/`destroy()` and be called from there. Register listeners with an `AbortController` signal so they can be removed in one call (see `Player`).
+- Weapon constants (`R201_WEAPON`, ...) are shared templates — never mutate them. `WeaponManager` stores copies via `cloneWeapon()`.
+- Fast projectiles must be hit-tested along the segment travelled this frame (`segmentIntersectsSphere`, `Player.findSegmentHit`), not just at their new position, or they tunnel through targets.
+- Game time (`stats.time`) accumulates simulated `delta`, so pausing doesn't count against level time limits.
 
 ## Gamepad Support
 
@@ -50,5 +63,7 @@ src/
 ## Build Notes
 
 - TypeScript strict mode is on — avoid `any` and uninitialized `!` fields unless already established in the file.
+- Keep pure logic (math, data transforms) free of DOM/WebGL access so it can be unit-tested in Node.
+- In dev builds the `Game` instance is exposed as `window.__game` for console debugging and browser tests.
 - `export type` is erased at build time; use plain `export` for enums and values that are read at runtime (e.g. `GameState`).
 - Vite bundles as ES modules (`"type": "module"` in package.json).

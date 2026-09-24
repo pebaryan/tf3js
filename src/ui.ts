@@ -1,6 +1,6 @@
 import { DebugHUDData, GameState, GameStats, WeaponHUDData } from './types';
 import { Level, LevelType } from './levels';
-import { Bindings, DEFAULT_BINDINGS, ACTION_LABELS, getBindings, setBindings, keyCodeToLabel, AimCurve, AIM_CURVE_LABELS, getAimCurve, setAimCurve } from './keybindings';
+import { Bindings, DEFAULT_BINDINGS, ACTION_LABELS, getBindings, setBindings, keyCodeToLabel, rebind, AimCurve, AIM_CURVE_LABELS, getAimCurve, setAimCurve } from './keybindings';
 
 export interface HUDUpdateData {
   currentLevel: Level;
@@ -40,6 +40,14 @@ export class GameUI {
   // Titan visor state
   private _wasPiloting = false;
   private visorOverlay: HTMLElement | null = null;
+
+  // Interaction prompt ("Hold [E] to ...")
+  private interactionPrompt: HTMLElement | null = null;
+  private interactionLabel: HTMLElement | null = null;
+  private interactionFill: HTMLElement | null = null;
+
+  /** Last value written per HUD element, so unchanged values don't touch the DOM every frame. */
+  private hudCache = new Map<string, string>();
 
   // Controls (keybind editor) state
   private isControlsOpen = false;
@@ -764,6 +772,13 @@ export class GameUI {
     this.buildControlsOverlay();
   }
 
+  /** Set innerHTML only when it actually changed (avoids 60 fps DOM re-parsing and layout). */
+  private setHTML(key: string, el: HTMLElement | undefined | null, html: string): void {
+    if (!el || this.hudCache.get(key) === html) return;
+    this.hudCache.set(key, html);
+    el.innerHTML = html;
+  }
+
   private applyVisorTheme(titan: boolean): void {
     // Visor overlay
     if (this.visorOverlay) {
@@ -888,27 +903,27 @@ export class GameUI {
 
     const accent = isPilotingTitan ? '#ff6600' : '#00ffcc';
 
-    this.hudElements['level-info'].innerHTML = isPilotingTitan
+    this.setHTML('level-info', this.hudElements['level-info'], isPilotingTitan
       ? `<strong>TITAN ACTIVE</strong><br>${currentLevel.name}`
-      : `<strong>LEVEL ${currentLevel.id}</strong><br>${currentLevel.name}`;
+      : `<strong>LEVEL ${currentLevel.id}</strong><br>${currentLevel.name}`);
 
-    this.hudElements['score'].innerHTML = `
+    this.setHTML('score', this.hudElements['score'], `
       SCORE: ${stats.score}
       <span style="color: ${isPilotingTitan ? '#ffaa44' : '#00ffff'}; font-size: 12px;">&times;${scoreMultiplier.toFixed(1)}</span>
-    `;
+    `);
 
-    this.hudElements['objective'].innerHTML = currentLevel.objective;
+    this.setHTML('objective', this.hudElements['objective'], currentLevel.objective);
 
     if (currentLevel.timeLimit) {
       const remaining = Math.max(0, currentLevel.timeLimit - stats.time);
-      this.hudElements['timer'].innerHTML = `
+      this.setHTML('timer', this.hudElements['timer'], `
         TIME: ${Math.floor(remaining)}s
         <span style="color: ${remaining < 10 ? '#ff0000' : accent}; font-size: 12px;">
           ${Math.floor(stats.time)}s elapsed
         </span>
-      `;
+      `);
     } else {
-      this.hudElements['timer'].innerHTML = `TIME: ${Math.floor(stats.time)}s`;
+      this.setHTML('timer', this.hudElements['timer'], `TIME: ${Math.floor(stats.time)}s`);
     }
 
     // Health: show titan hull when piloting, pilot health otherwise
@@ -926,7 +941,7 @@ export class GameUI {
       if (titanBar) titanBar.style.width = `${stats.titanMeter}%`;
       if (titanLabel) {
         if (stats.titanMeter >= 100) {
-          titanLabel.textContent = 'TITAN READY [T]';
+          titanLabel.textContent = `TITAN READY [${keyCodeToLabel(getBindings().callTitan)}]`;
           titanLabel.style.color = '#ffff00';
           titanLabel.style.textShadow = '0 0 10px #ffff00';
         } else {
@@ -957,9 +972,9 @@ export class GameUI {
 
     const debugVelocity = this.hudElements['debugVelocity'];
     if (debugVelocity) {
-      debugVelocity.innerHTML = isPilotingTitan
+      this.setHTML('debugVelocity', debugVelocity, isPilotingTitan
         ? `HULL ${Math.round(titanHealth)}%<br>SHIELD ${Math.round(titanShield)}%`
-        : `VEL ${debug.velocity.x.toFixed(1)} / ${debug.velocity.y.toFixed(1)} / ${debug.velocity.z.toFixed(1)}<br>JUMPS ${debug.jumpCount}`;
+        : `VEL ${debug.velocity.x.toFixed(1)} / ${debug.velocity.y.toFixed(1)} / ${debug.velocity.z.toFixed(1)}<br>JUMPS ${debug.jumpCount}`);
     }
 
     const debugFlags = this.hudElements['debugFlags'];
@@ -975,7 +990,7 @@ export class GameUI {
         ">${label}</span>
       `;
 
-      debugFlags.innerHTML = isPilotingTitan
+      this.setHTML('debugFlags', debugFlags, isPilotingTitan
         ? [
             renderFlag('DASH', titanDashMeter >= 40, '#ff8844'),
             renderFlag('SHIELD', titanShield > 0, '#4488ff'),
@@ -983,7 +998,7 @@ export class GameUI {
         : [
             renderFlag('SPRINT', debug.sprinting, '#66ff99'),
             renderFlag('CROUCH', debug.crouching, '#ffaa55'),
-          ].join('');
+          ].join(''));
     }
 
     // Weapon panel
@@ -1020,12 +1035,12 @@ export class GameUI {
     const ammoMeta = this.hudElements['ammoMeta'];
     if (ammoMeta) {
       if (isPilotingTitan) {
-        ammoMeta.innerHTML = 'INFINITE MAG<br>AUTO-FEED';
+        this.setHTML('ammoMeta', ammoMeta, 'INFINITE MAG<br>AUTO-FEED');
       } else {
         const percent = Math.round(weapon.reloadProgress * 100);
-        ammoMeta.innerHTML = weapon.isReloading
+        this.setHTML('ammoMeta', ammoMeta, weapon.isReloading
           ? `RELOADING<br>${percent}%`
-          : `MAG ${weapon.magazineSize}<br>LIVE ROUNDS`;
+          : `MAG ${weapon.magazineSize}<br>LIVE ROUNDS`);
       }
     }
 
@@ -1046,13 +1061,13 @@ export class GameUI {
     const ammoPips = this.hudElements['ammoPips'];
     if (ammoPips) {
       if (isPilotingTitan) {
-        ammoPips.innerHTML = '';
+        this.setHTML('ammoPips', ammoPips, '');
       } else {
         const pipCount = Math.min(Math.max(weapon.magazineSize, 1), 24);
         const filledPips = weapon.isReloading
           ? Math.max(1, Math.round(weapon.reloadProgress * pipCount))
           : Math.round((weapon.ammo / Math.max(weapon.magazineSize, 1)) * pipCount);
-        ammoPips.innerHTML = Array.from({ length: pipCount }, (_, index) => {
+        this.setHTML('ammoPips', ammoPips, Array.from({ length: pipCount }, (_, index) => {
           const active = index < filledPips;
           const color = weapon.isReloading ? '#ffaa00' : weapon.accentColor;
           return `<span style="
@@ -1062,19 +1077,19 @@ export class GameUI {
             box-shadow:${active ? `0 0 8px ${color}66` : 'none'};
             opacity:${active ? '1' : '0.45'};
           "></span>`;
-        }).join('');
+        }).join(''));
       }
     }
 
     const weaponSlots = this.hudElements['weaponSlots'];
     if (weaponSlots) {
       if (isPilotingTitan) {
-        weaponSlots.innerHTML = `
+        this.setHTML('weaponSlots', weaponSlots, `
           <div style="display:flex;justify-content:space-between;color:#ff8844;border-right:2px solid #ff6600;padding-right:8px;">
             <span>01</span><span>XO-16 Chaingun</span>
-          </div>`;
+          </div>`);
       } else {
-        weaponSlots.innerHTML = weapon.weaponSlots.map((slot) => `
+        this.setHTML('weaponSlots', weaponSlots, weapon.weaponSlots.map((slot) => `
           <div style="
             display:flex;
             justify-content:space-between;
@@ -1085,43 +1100,43 @@ export class GameUI {
             <span>0${slot.index + 1}</span>
             <span>${slot.name}</span>
           </div>
-        `).join('');
+        `).join(''));
       }
     }
 
     const weaponAttachments = this.hudElements['weaponAttachments'];
     if (weaponAttachments) {
-      weaponAttachments.innerHTML = isPilotingTitan
+      this.setHTML('weaponAttachments', weaponAttachments, isPilotingTitan
         ? 'SYS // TITAN-CLASS ORDNANCE'
         : weapon.attachments.length > 0
           ? `MODS // ${weapon.attachments.join(' // ')}`
-          : 'MODS // STOCK CONFIG';
+          : 'MODS // STOCK CONFIG');
     }
 
     const weaponUtility = this.hudElements['weaponUtility'];
     if (weaponUtility) {
       if (isPilotingTitan) {
-        weaponUtility.innerHTML = `
+        this.setHTML('weaponUtility', weaponUtility, `
           <div style="color:#ff8844;">DASH ${Math.round(titanDashMeter)}%</div>
           <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);margin-top:4px;">
             <div style="width:${Math.max(0, Math.min(100, titanDashMeter))}%;height:100%;background:#ff8844;transition:width 0.1s linear;"></div>
           </div>
-        `;
+        `);
       } else {
-        weaponUtility.innerHTML = `
+        this.setHTML('weaponUtility', weaponUtility, `
           <div style="color:${weapon.grenadeCount > 0 ? '#88cc88' : '#ff5555'};">FRAG ${weapon.grenadeCount}</div>
           <div style="color:${weapon.grappleColor};">GRAPPLE ${weapon.grappleLabel}</div>
           <div style="width:100%;height:4px;background:rgba(255,255,255,0.08);margin-top:4px;">
             <div style="width:${Math.max(0, Math.min(100, weapon.grappleProgress * 100))}%;height:100%;background:${weapon.grappleColor};transition:width 0.1s linear;"></div>
           </div>
-        `;
+        `);
       }
     }
 
     let statsText = '';
     switch (currentLevel.type) {
       case LevelType.CAPTURE:
-        statsText += `CAPTURED: ${capturePoints.filter(p => p.captured).length}/3<br>`;
+        statsText += `CAPTURED: ${capturePoints.filter(p => p.captured).length}/${capturePoints.length}<br>`;
         statsText += `HOLD TIME: ${Math.floor(capturedTime)}s/30s`;
         break;
       case LevelType.RACE:
@@ -1135,7 +1150,7 @@ export class GameUI {
       default:
         statsText += `TARGETS: ${destroyedTargets}/${currentLevel.targetCount}`;
     }
-    this.hudElements['stats'].innerHTML = statsText;
+    this.setHTML('stats', this.hudElements['stats'], statsText);
 
     const sniperScope = this.hudElements['sniperScope'];
     if (sniperScope) {
@@ -1233,9 +1248,21 @@ export class GameUI {
     };
   }
 
+  /** Hide every menu/overlay (main menu, level select, pause, results, controls, prompts). */
   hideMenus(): void {
     document.getElementById('main-menu')?.classList.add('hidden');
     document.getElementById('level-select')?.classList.add('hidden');
+    for (const key of ['pause', 'level-complete', 'game-over']) {
+      const el = this.hudElements[key];
+      if (el) el.style.display = 'none';
+    }
+    if (this.isControlsOpen) {
+      this.isControlsOpen = false;
+      this.controlsOnBack = null;
+      document.getElementById('controls-overlay')?.classList.add('hidden');
+    }
+    this.hideInteractionPrompt();
+    this.menuButtons = [];
   }
 
   showPause(onResume: () => void, onRestart: () => void, onMenu: () => void): void {
@@ -1262,8 +1289,10 @@ export class GameUI {
     this.hudElements['pause'].style.display = 'none';
   }
 
-  showLevelComplete(stats: GameStats, onNext: () => void, onRestart: () => void, onMenu: () => void): void {
+  showLevelComplete(stats: GameStats, onNext: () => void, onRestart: () => void, onMenu: () => void, hasNextLevel = true): void {
     this.hudElements['level-complete'].style.display = 'flex';
+    const nextBtn = document.getElementById('next-level-btn');
+    if (nextBtn) nextBtn.textContent = hasNextLevel ? 'Next Mission' : 'Campaign Complete';
     this.menuButtons = Array.from(this.hudElements['level-complete'].querySelectorAll('button'));
     this.menuFocusIndex = 0;
     this.lastMenuState = GameState.LEVEL_COMPLETE;
@@ -1275,7 +1304,7 @@ export class GameUI {
         Score: ${stats.score} <br>
         Kills: ${stats.kills} <br>
         Time: ${Math.floor(stats.time)}s <br>
-        Objects: ${stats.objectivesCompleted}
+        Objectives: ${stats.objectivesCompleted}
       `;
     }
 
@@ -1523,6 +1552,9 @@ export class GameUI {
       'fire': 'RT',
       'callTitan': 'D-Pad↓',
       'embark': 'Hold X',
+      'reload': 'Tap X',
+      'grenade': 'B',
+      'grapple': 'A',
       'pause': 'Menu',
       'restart': '—',
       'mainMenu': '—'
@@ -1541,12 +1573,11 @@ export class GameUI {
       e.preventDefault();
       e.stopPropagation();
       if (e.code !== 'Escape') {
-        setBindings({ ...getBindings(), [action]: e.code });
+        setBindings(rebind(getBindings(), action, e.code));
       }
-      btn.textContent = `[ ${keyCodeToLabel(getBindings()[action])} ]`;
-      btn.style.background = '';
-      btn.style.color = '';
       this.isRebinding = false;
+      // Rebuild so any action that swapped keys shows its new binding too
+      this.rebuildControlsList();
     };
     document.addEventListener('keydown', handler, { once: true, capture: true });
   }
@@ -1574,9 +1605,43 @@ export class GameUI {
   }
 
   showEmbarkIndicator(show: boolean): void {
-    const indicator = document.getElementById('embark-indicator');
-    if (indicator) {
-      indicator.style.display = show ? 'block' : 'none';
+    const indicator = this.hudElements['embarkIndicator'];
+    if (!indicator) return;
+    if (show) {
+      this.setHTML('embarkIndicator', indicator,
+        `HOLD [${keyCodeToLabel(getBindings().embark)}] TO EMBARK<br><span style="font-size:14px;color:#888;">Or hold X on controller</span>`);
+    }
+    const display = show ? 'block' : 'none';
+    if (indicator.style.display !== display) indicator.style.display = display;
+  }
+
+  /** Show the "Hold [key] to ..." prompt with a hold-progress bar (0–1). */
+  showInteractionPrompt(label: string, color: string, progress: number): void {
+    if (!this.interactionPrompt) {
+      const prompt = document.createElement('div');
+      prompt.id = 'interaction-prompt';
+      prompt.style.cssText = 'position:fixed;bottom:180px;left:50%;transform:translateX(-50%);color:#fff;font:14px monospace;z-index:100;background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:4px;text-align:center;pointer-events:none;';
+      const text = document.createElement('div');
+      const track = document.createElement('div');
+      track.style.cssText = 'margin-top:6px;width:220px;height:6px;background:rgba(255,255,255,0.15);border-radius:999px;overflow:hidden;';
+      const fill = document.createElement('div');
+      fill.style.cssText = 'width:0%;height:100%;';
+      track.appendChild(fill);
+      prompt.append(text, track);
+      document.body.appendChild(prompt);
+      this.interactionPrompt = prompt;
+      this.interactionLabel = text;
+      this.interactionFill = fill;
+    }
+    this.interactionPrompt.style.display = 'block';
+    if (this.interactionLabel!.textContent !== label) this.interactionLabel!.textContent = label;
+    this.interactionFill!.style.width = `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`;
+    this.interactionFill!.style.background = color;
+  }
+
+  hideInteractionPrompt(): void {
+    if (this.interactionPrompt && this.interactionPrompt.style.display !== 'none') {
+      this.interactionPrompt.style.display = 'none';
     }
   }
 

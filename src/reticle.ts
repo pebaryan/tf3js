@@ -25,6 +25,7 @@ const WEAPON_RETICLES: Record<string, ReticleConfig> = {
 export class ReticleRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+  private readonly listeners = new AbortController();
   private currentWeapon: string = 'R-201';
   private dynamicSpread: number = 0;
   private hitmarkerOpacity: number = 0;
@@ -47,7 +48,7 @@ export class ReticleRenderer {
     document.body.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    window.addEventListener('resize', () => this.resize(), { signal: this.listeners.signal });
     this.hideDefaultCrosshair();
   }
 
@@ -527,6 +528,7 @@ show(): void {
   }
 
   destroy(): void {
+    this.listeners.abort();
     this.canvas.remove();
   }
 }

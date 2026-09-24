@@ -9,6 +9,9 @@ export interface Bindings {
   pause: string;
   callTitan: string;
   embark: string;
+  reload: string;
+  grenade: string;
+  grapple: string;
   restart: string;
   mainMenu: string;
 }
@@ -24,6 +27,9 @@ export const DEFAULT_BINDINGS: Bindings = {
   pause:     'Escape',
   callTitan: 'KeyT',
   embark:    'KeyE',
+  reload:    'KeyR',
+  grenade:   'KeyG',
+  grapple:   'KeyQ',
   restart:   'KeyY',
   mainMenu:  'KeyM',
 };
@@ -39,6 +45,9 @@ export const ACTION_LABELS: Record<keyof Bindings, string> = {
   pause:     'Pause',
   callTitan: 'Call Titan',
   embark:    'Embark / Interact',
+  reload:    'Reload',
+  grenade:   'Frag Grenade (hold to aim)',
+  grapple:   'Grapple Hook',
   restart:   'Restart Level',
   mainMenu:  'Main Menu',
 };
@@ -91,29 +100,68 @@ export function getAimCurve(): AimCurve {
 
 export function setAimCurve(curve: AimCurve): void {
   _cachedCurve = curve;
-  localStorage.setItem(AIM_CURVE_STORAGE_KEY, curve);
+  try {
+    localStorage.setItem(AIM_CURVE_STORAGE_KEY, curve);
+  } catch {
+    // Storage may be unavailable (private mode, quota); keep the in-memory value.
+  }
 }
 
 const STORAGE_KEY = 'tf3js_keybindings';
 
 let _cached: Bindings | null = null;
 
+/** Merge stored bindings over the defaults, ignoring unknown actions and non-string values. */
+export function parseStoredBindings(raw: string | null): Bindings {
+  const bindings = { ...DEFAULT_BINDINGS };
+  if (!raw) return bindings;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      for (const action of Object.keys(DEFAULT_BINDINGS) as (keyof Bindings)[]) {
+        const value = (parsed as Record<string, unknown>)[action];
+        if (typeof value === 'string' && value.length > 0) bindings[action] = value;
+      }
+    }
+  } catch {
+    // Corrupt JSON: fall back to defaults.
+  }
+  return bindings;
+}
+
 export function getBindings(): Bindings {
   if (_cached) return _cached;
+  let stored: string | null = null;
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      _cached = { ...DEFAULT_BINDINGS, ...JSON.parse(stored) };
-      return _cached!;
-    }
-  } catch {}
-  _cached = { ...DEFAULT_BINDINGS };
+    stored = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    // Storage unavailable.
+  }
+  _cached = parseStoredBindings(stored);
   return _cached;
 }
 
 export function setBindings(b: Bindings): void {
   _cached = { ...b };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(_cached));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(_cached));
+  } catch {
+    // Storage may be unavailable (private mode, quota); keep the in-memory value.
+  }
+}
+
+/**
+ * Bind `code` to `action`. If another action already uses `code`, it takes
+ * over the key `action` previously had, so no two actions share a key.
+ */
+export function rebind(bindings: Bindings, action: keyof Bindings, code: string): Bindings {
+  const next = { ...bindings };
+  const previous = next[action];
+  for (const other of Object.keys(next) as (keyof Bindings)[]) {
+    if (other !== action && next[other] === code) next[other] = previous;
+  }
+  next[action] = code;
+  return next;
 }
 
 export function keyCodeToLabel(code: string): string {

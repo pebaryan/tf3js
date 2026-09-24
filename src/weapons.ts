@@ -426,6 +426,26 @@ export const TITAN_WEAPON: Weapon = {
   attachments: {},
 };
 
+/**
+ * Create an independent copy of a weapon definition.
+ *
+ * Weapon constants (R201_WEAPON, etc.) are shared templates. Anything that
+ * mutates per-instance state (attachments) must operate on a copy, otherwise
+ * attachments leak into every other holder of the same template and persist
+ * across level restarts.
+ */
+export function cloneWeapon(weapon: Weapon): Weapon {
+  return {
+    ...weapon,
+    recoil: { ...weapon.recoil },
+    bulletVisuals: { ...weapon.bulletVisuals },
+    attachments: { ...weapon.attachments },
+  };
+}
+
+/** Maximum number of pilot weapons carried at once (primary + secondary). */
+export const MAX_WEAPON_SLOTS = 2;
+
 export class WeaponManager {
   private weapons: Weapon[] = [];
   private currentIndex = 0;
@@ -433,10 +453,12 @@ export class WeaponManager {
   private reloading = false;
   private reloadTimer = 0;
 
+  /** Adds a private copy of `weapon` and returns that copy. */
   addWeapon(weapon: Weapon): Weapon {
-    this.weapons.push(weapon);
-    this.ammo.push(this.getEffectiveMagazineSize(weapon));
-    return weapon;
+    const copy = cloneWeapon(weapon);
+    this.weapons.push(copy);
+    this.ammo.push(this.getEffectiveMagazineSize(copy));
+    return copy;
   }
 
   addWeapons(weapons: Weapon[]): void {
@@ -449,6 +471,7 @@ export class WeaponManager {
 
   switchTo(index: number): Weapon | null {
     if (index >= 0 && index < this.weapons.length) {
+      if (index !== this.currentIndex) this.cancelReload();
       this.currentIndex = index;
       return this.weapons[index];
     }
@@ -457,12 +480,14 @@ export class WeaponManager {
 
   nextWeapon(): Weapon | null {
     if (this.weapons.length === 0) return null;
+    if (this.weapons.length > 1) this.cancelReload();
     this.currentIndex = (this.currentIndex + 1) % this.weapons.length;
     return this.weapons[this.currentIndex];
   }
 
   prevWeapon(): Weapon | null {
     if (this.weapons.length === 0) return null;
+    if (this.weapons.length > 1) this.cancelReload();
     this.currentIndex = (this.currentIndex - 1 + this.weapons.length) % this.weapons.length;
     return this.weapons[this.currentIndex];
   }
@@ -483,11 +508,13 @@ export class WeaponManager {
     return this.weapons;
   }
 
+  /** Replaces the weapon in `index` with a copy of `newWeapon`; returns the weapon that was dropped. */
   replaceWeapon(index: number, newWeapon: Weapon): Weapon | null {
     if (index < 0 || index >= this.weapons.length) return null;
     const old = this.weapons[index];
-    this.weapons[index] = newWeapon;
-    this.ammo[index] = this.getEffectiveMagazineSize(newWeapon);
+    const copy = cloneWeapon(newWeapon);
+    this.weapons[index] = copy;
+    this.ammo[index] = this.getEffectiveMagazineSize(copy);
     this.cancelReload();
     return old;
   }
@@ -535,6 +562,12 @@ export class WeaponManager {
   getEffectiveZoom(weapon: Weapon): number {
     if (weapon.attachments.optic?.modifiers?.zoomMult) return weapon.attachments.optic.modifiers.zoomMult;
     return 1.0;
+  }
+
+  getEffectiveDamage(weapon: Weapon): number {
+    let mult = 1.0;
+    if (weapon.attachments.barrel?.modifiers?.damageMult) mult *= weapon.attachments.barrel.modifiers.damageMult;
+    return weapon.damage * mult;
   }
 
   getEffectiveAccuracy(weapon: Weapon): number {

@@ -2,6 +2,13 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { BallisticsSystem, Bullet } from './ballistics';
 import { soundManager } from './sound';
+import { segmentIntersectsSphere } from './collision';
+
+/** Sphere approximating the player's body for enemy-bullet hit tests. */
+export interface PlayerHitbox {
+  center: THREE.Vector3;
+  radius: number;
+}
 
 // --- AI State Machine ---
 
@@ -89,6 +96,11 @@ export class Enemy {
   private isFlashing = false;
   private flashTimer = 0;
   private flashMeshes: THREE.Mesh[] = [];
+
+  // --- Environment (refreshed every update) ---
+  private worldMeshes: THREE.Mesh[] = [];
+  private readonly moveRaycaster = new THREE.Raycaster();
+  private readonly ENEMY_RADIUS = 0.4;
 
   // --- Animation ---
   private headMesh: THREE.Mesh | null = null;
@@ -311,7 +323,12 @@ export class Enemy {
 
   // --- Main AI Update ---
 
-  update(delta: number, _cameraPos: THREE.Vector3, playerPos: THREE.Vector3, worldMeshes: THREE.Mesh[], playerVel?: THREE.Vector3): void {
+  /**
+   * Advance AI, movement and bullets by `delta` seconds.
+   * Returns the positions of any enemy bullets that struck the player this frame.
+   */
+  update(delta: number, playerPos: THREE.Vector3, worldMeshes: THREE.Mesh[], playerHitbox: PlayerHitbox, playerVel?: THREE.Vector3): THREE.Vector3[] {
+    this.worldMeshes = worldMeshes;
     this.stateTimer += delta;
     this.fireTimer += delta;
     if (this.burstCooldown > 0) this.burstCooldown -= delta;
@@ -346,7 +363,7 @@ export class Enemy {
     this.trackHead(playerPos);
 
     // --- Update bullets ---
-    this.updateBullets(delta);
+    const playerHits = this.updateBullets(delta, playerHitbox);
 
     // --- Update flash ---
     if (this.isFlashing) {
@@ -360,6 +377,7 @@ export class Enemy {
       }
     }
 
+    return playerHits;
   }
 
   private updateStateMachine(dist: number, delta: number): void {
@@ -554,8 +572,7 @@ export class Enemy {
     const right = new THREE.Vector3(-toPlayer.z, 0, toPlayer.x);
     const moveDir = right.multiplyScalar(this.flankSide * 0.7).add(toPlayer.multiplyScalar(0.3));
     moveDir.normalize();
-    this.mesh.position.x += moveDir.x * this.FLANK_SPEED * delta;
-    this.mesh.position.z += moveDir.z * this.FLANK_SPEED * delta;
+    this.tryMove(moveDir.x * this.FLANK_SPEED * delta, moveDir.z * this.FLANK_SPEED * delta);
   }
 
   private doSeekCover(delta: number, playerPos: THREE.Vector3): void {
@@ -568,8 +585,7 @@ export class Enemy {
     const right = new THREE.Vector3(-toPlayer.z, 0, toPlayer.x);
     const moveDir = right.multiplyScalar(this.flankSide * 0.5).add(toPlayer.multiplyScalar(-0.5));
     moveDir.normalize();
-    this.mesh.position.x += moveDir.x * this.CHASE_SPEED * delta;
-    this.mesh.position.z += moveDir.z * this.CHASE_SPEED * delta;
+    this.tryMove(moveDir.x * this.CHASE_SPEED * delta, moveDir.z * this.CHASE_SPEED * delta);
   }
 
   private doPatrol(delta: number): void {
@@ -592,8 +608,10 @@ export class Enemy {
 
     // Move toward waypoint
     toTarget.normalize();
-    this.mesh.position.x += toTarget.x * this.PATROL_SPEED * delta;
-    this.mesh.position.z += toTarget.z * this.PATROL_SPEED * delta;
+    if (!this.tryMove(toTarget.x * this.PATROL_SPEED * delta, toTarget.z * this.PATROL_SPEED * delta)) {
+      // Waypoint is behind a wall — skip to the next one instead of walking into it forever
+      this.patrolIndex = (this.patrolIndex + 1) % this.patrolWaypoints.length;
+    }
   }
 
   private moveToward(target: THREE.Vector3, amount: number): void {
@@ -601,8 +619,7 @@ export class Enemy {
     dir.y = 0;
     if (dir.length() > 0.5) {
       dir.normalize();
-      this.mesh.position.x += dir.x * amount;
-      this.mesh.position.z += dir.z * amount;
+      this.tryMove(dir.x * amount, dir.z * amount);
     }
   }
 
@@ -611,8 +628,7 @@ export class Enemy {
     dir.y = 0;
     if (dir.length() > 0.1) {
       dir.normalize();
-      this.mesh.position.x += dir.x * amount;
-      this.mesh.position.z += dir.z * amount;
+      this.tryMove(dir.x * amount, dir.z * amount);
     }
   }
 
@@ -625,8 +641,29 @@ export class Enemy {
 
     // Right vector (perpendicular)
     const right = new THREE.Vector3(-toPlayer.z, 0, toPlayer.x);
-    this.mesh.position.x += right.x * this.STRAFE_SPEED * this.strafeDir * delta;
-    this.mesh.position.z += right.z * this.STRAFE_SPEED * this.strafeDir * delta;
+    if (!this.tryMove(right.x * this.STRAFE_SPEED * this.strafeDir * delta, right.z * this.STRAFE_SPEED * this.strafeDir * delta)) {
+      this.strafeDir *= -1; // bumped into cover — strafe the other way
+    }
+  }
+
+  /**
+   * Move horizontally unless a wall is in the way (checked at knee and chest height).
+   * Returns false if the move was blocked.
+   */
+  private tryMove(dx: number, dz: number): boolean {
+    const distance = Math.hypot(dx, dz);
+    if (distance < 1e-6) return true;
+    const dir = new THREE.Vector3(dx / distance, 0, dz / distance);
+    for (const height of [0.4, 1.2]) {
+      const origin = this.mesh.position.clone();
+      origin.y += height;
+      this.moveRaycaster.set(origin, dir);
+      this.moveRaycaster.far = distance + this.ENEMY_RADIUS;
+      if (this.moveRaycaster.intersectObjects(this.worldMeshes, false).length > 0) return false;
+    }
+    this.mesh.position.x += dx;
+    this.mesh.position.z += dz;
+    return true;
   }
 
   private animateLegs(delta: number): void {
@@ -665,16 +702,38 @@ export class Enemy {
     this.headMesh.rotation.y += (clamped - this.headMesh.rotation.y) * 0.1;
   }
 
-  private updateBullets(delta: number): void {
+  private updateBullets(delta: number, playerHitbox: PlayerHitbox): THREE.Vector3[] {
+    const playerHits: THREE.Vector3[] = [];
+    const raycaster = new THREE.Raycaster();
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
+      const prevPos = b.mesh.position.clone();
       this.ballisticsSystem.updateBullet(b, delta);
 
-      if (b.time > b.maxLifetime || b.mesh.position.y < -5) {
+      // Clip this frame's travel against level geometry so bullets can't pass through walls
+      let segmentEnd = b.mesh.position;
+      let hitWall = false;
+      const step = b.mesh.position.clone().sub(prevPos);
+      const stepLen = step.length();
+      if (stepLen > 1e-6) {
+        raycaster.set(prevPos, step.divideScalar(stepLen));
+        raycaster.far = stepLen;
+        const wallHit = raycaster.intersectObjects(this.worldMeshes, false)[0];
+        if (wallHit) {
+          segmentEnd = wallHit.point;
+          hitWall = true;
+        }
+      }
+
+      const hitPlayer = segmentIntersectsSphere(prevPos, segmentEnd, playerHitbox.center, playerHitbox.radius);
+      if (hitPlayer) playerHits.push(prevPos.clone());
+
+      if (hitPlayer || hitWall || b.time > b.maxLifetime || b.mesh.position.y < -5) {
         this.ballisticsSystem.disposeBullet(b);
         this.bullets.splice(i, 1);
       }
     }
+    return playerHits;
   }
 
   checkBulletHit(bulletPos: THREE.Vector3): boolean {

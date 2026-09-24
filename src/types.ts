@@ -1,3 +1,5 @@
+import type * as THREE from 'three';
+
 export enum GameState {
   MAIN_MENU = 'main_menu',
   PLAYING = 'playing',
@@ -48,4 +50,12 @@ export interface DebugHUDData {
   jumpCount: number;
   sprinting: boolean;
   crouching: boolean;
+}
+
+/** Anything the player's weapons can damage (training targets, enemies). */
+export interface Damageable {
+  health: number;
+  group: THREE.Object3D;
+  checkBulletHit(bulletPos: THREE.Vector3): boolean;
+  takeDamage(amount: number, hitPoint?: THREE.Vector3): void;
 }

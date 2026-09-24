@@ -14,6 +14,8 @@ export interface Bullet {
   gravity: number;
   explosive: boolean;
   splashRadius: number;
+  /** Damage dealt on hit, captured at fire time so weapon swaps mid-flight don't change it. */
+  damage: number;
 }
 
 export class BallisticsSystem {
@@ -82,6 +84,7 @@ export class BallisticsSystem {
       gravity: visuals.gravity,
       explosive: visuals.explosive,
       splashRadius: visuals.splashRadius,
+      damage: 0,
     };
   }
 
@@ -148,7 +151,9 @@ export class BallisticsSystem {
 
   /**
    * Calculate a parabolic launch velocity to hit a target point, compensating for gravity.
-   * Falls back to straight aim if no valid solution exists or the angle is too steep.
+   * `gravity` uses the same convention as BulletVisuals.gravity: the per-second change in
+   * velocity.y, so bullet drop is negative. Falls back to straight aim if no valid solution
+   * exists or the angle is too steep.
    */
   static calculateParabolicVelocity(
     startPos: THREE.Vector3,
@@ -163,16 +168,20 @@ export class BallisticsSystem {
     );
     const verticalDist = displacement.y;
 
-    const discriminant =
-      bulletSpeed * bulletSpeed * bulletSpeed * bulletSpeed -
-      gravity *
-        (gravity * horizontalDist * horizontalDist +
-          2 * verticalDist * bulletSpeed * bulletSpeed);
+    // Standard projectile formula uses the magnitude of downward acceleration
+    const g = -gravity;
+    if (g <= 1e-6) {
+      // No drop: aim straight at the target
+      if (displacement.lengthSq() < 1e-12) return fallbackAimDir.clone().multiplyScalar(bulletSpeed);
+      return displacement.normalize().multiplyScalar(bulletSpeed);
+    }
+
+    const v2 = bulletSpeed * bulletSpeed;
+    const discriminant = v2 * v2 - g * (g * horizontalDist * horizontalDist + 2 * verticalDist * v2);
 
     if (discriminant >= 0 && horizontalDist > 0.1) {
-      const tanTheta =
-        (bulletSpeed * bulletSpeed - Math.sqrt(discriminant)) /
-        (gravity * horizontalDist);
+      // Low (flat) trajectory solution
+      const tanTheta = (v2 - Math.sqrt(discriminant)) / (g * horizontalDist);
       const launchAngle = Math.atan(tanTheta);
 
       // Only compensate if angle is reasonable (less than 15 degrees)

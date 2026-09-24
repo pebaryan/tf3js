@@ -10,6 +10,11 @@ export class Target {
   
   private maxHealth = 100;
   health = 100;
+  /** True once the target has been knocked down. Destroyed targets stay down and ignore hits. */
+  destroyed = false;
+  private knockdown = 0;
+  private knockdownAxis: THREE.Vector3 | null = null;
+  private readonly baseQuaternion = new THREE.Quaternion();
   private healthBarGroup: THREE.Group;
   private healthBar: THREE.Mesh;
   private healthBarBg: THREE.Mesh;
@@ -162,17 +167,18 @@ export class Target {
     this.mesh.add(this.flashMesh);
   }
   
-  takeDamage(amount: number, _hitPoint: THREE.Vector3) {
+  takeDamage(amount: number, _hitPoint?: THREE.Vector3) {
+    if (this.destroyed) return;
     this.health = Math.max(0, this.health - amount);
-    
+
     // Flash white
     this.isFlashing = true;
     this.flashTimer = 0.1;
     (this.flashMesh.material as THREE.MeshBasicMaterial).opacity = 0.5;
-    
+
     // Update health bar
     const healthPercent = this.health / this.maxHealth;
-    this.healthBar.scale.x = healthPercent;
+    this.healthBar.scale.x = Math.max(0.001, healthPercent);
     // Color based on health
     const mat = this.healthBar.material as THREE.MeshBasicMaterial;
     if (healthPercent > 0.5) {
@@ -182,18 +188,32 @@ export class Target {
     } else {
       mat.color.setHex(0xff0000);
     }
-    
-    // Reset health if destroyed
+
     if (this.health <= 0) {
-      setTimeout(() => {
-        this.health = this.maxHealth;
-        this.healthBar.scale.x = 1;
-        (this.healthBar.material as THREE.MeshBasicMaterial).color.setHex(0x00ff00);
-      }, 2000);
+      this.destroyed = true;
+      this.healthBarGroup.visible = false;
+      // The fallen target should no longer block movement
+      this.world.removeBody(this.body);
     }
   }
-  
+
   update(delta: number, cameraPosition: THREE.Vector3) {
+    // Knocked-down targets tip over, away from the shooter
+    if (this.destroyed && this.knockdown < 1) {
+      if (!this.knockdownAxis) {
+        const away = this.mesh.position.clone().sub(cameraPosition);
+        away.y = 0;
+        if (away.lengthSq() < 1e-6) away.set(0, 0, 1);
+        away.normalize();
+        this.knockdownAxis = new THREE.Vector3(0, 1, 0).cross(away).normalize();
+        this.baseQuaternion.copy(this.mesh.quaternion);
+      }
+      this.knockdown = Math.min(1, this.knockdown + delta * 3);
+      const eased = 1 - (1 - this.knockdown) * (1 - this.knockdown);
+      const tip = new THREE.Quaternion().setFromAxisAngle(this.knockdownAxis, eased * (Math.PI / 2 - 0.15));
+      this.mesh.quaternion.copy(tip.multiply(this.baseQuaternion));
+    }
+
     this.healthBarGroup.position.set(this.group.position.x, this.group.position.y + 3.1, this.group.position.z);
     this.healthBarGroup.lookAt(cameraPosition);
 
@@ -210,6 +230,7 @@ export class Target {
   }
   
   checkBulletHit(bulletPos: THREE.Vector3): boolean {
+    if (this.destroyed) return false;
     const targetPos = this.body.position;
     const dx = bulletPos.x - targetPos.x;
     const dz = bulletPos.z - targetPos.z;
@@ -219,9 +240,9 @@ export class Target {
   }
 
   dispose(): void {
+    this.world.removeBody(this.body);
     this.scene.remove(this.mesh);
     this.scene.remove(this.healthBarGroup);
-    this.world.removeBody(this.body);
     this.mesh.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.geometry.dispose();

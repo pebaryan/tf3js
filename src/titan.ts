@@ -1381,6 +1381,14 @@ export class Titan {
   
   private destroy(): void {
     this.state = TitanState.DESTROYED;
+    this.isFiring = false;
+    this.titanVelocity.set(0, 0, 0);
+    this.dashTimer = 0;
+    if (this.fadeOverlay) {
+      this.fadeOverlay.style.transition = 'none';
+      this.fadeOverlay.style.opacity = '0';
+    }
+    if (this.bodyBody) this.world.removeBody(this.bodyBody);
     
     // Create explosion effects
     for (let i = 0; i < 20; i++) {
@@ -1417,6 +1425,13 @@ export class Titan {
   }
   
   dispose(): void {
+    if (this.bodyBody) {
+      this.world.removeBody(this.bodyBody);
+      this.bodyBody = undefined;
+    }
+    this.fadeOverlay?.remove();
+    this.fadeOverlay = null;
+
     if (this.cockpitWeapon) {
       this.cockpitWeapon.visible = false;
       if (this.cockpitWeapon.parent) this.cockpitWeapon.parent.remove(this.cockpitWeapon);

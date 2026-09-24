@@ -16,6 +16,7 @@ interface EnemyMarker {
 export class RadarRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+  private readonly listeners = new AbortController();
   private damageIndicators: DamageIndicator[] = [];
   private enemyMarkers: EnemyMarker[] = [];
   private readonly DAMAGE_DURATION = 1500;
@@ -37,7 +38,7 @@ export class RadarRenderer {
     document.body.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    window.addEventListener('resize', () => this.resize(), { signal: this.listeners.signal });
   }
 
   private resize(): void {
@@ -201,6 +202,7 @@ export class RadarRenderer {
   }
 
   destroy(): void {
+    this.listeners.abort();
     this.canvas.remove();
   }
 }

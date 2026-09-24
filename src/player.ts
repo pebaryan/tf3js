@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import * as CANNON from "cannon-es";
 import { getBindings, getAimCurve, applyAimCurve } from "./keybindings";
-import { Weapon, WeaponManager, R201_WEAPON } from "./weapons";
+import { Attachment, Weapon, WeaponManager, R201_WEAPON, MAX_WEAPON_SLOTS } from "./weapons";
 import { BallisticsSystem, Bullet } from "./ballistics";
 import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG, DEFAULT_MUZZLE_CONFIG, EPG_EXPLOSION_CONFIG, FRAG_EXPLOSION_CONFIG } from "./effects";
 import { MovementSystem, MovementInput } from "./movement";
@@ -9,7 +9,8 @@ import { AimingSystem } from "./aiming";
 import { ReticleRenderer } from "./reticle";
 import { RadarRenderer } from "./radar";
 import { soundManager } from "./sound";
-import type { DebugHUDData, WeaponHUDData } from "./types";
+import { disposeObject3D, splashDamage } from "./collision";
+import type { Damageable, DebugHUDData, WeaponHUDData } from "./types";
 
 interface KeyState {
   forward: boolean;
@@ -433,6 +434,9 @@ export class Player {
   private weaponSwitchCooldown = 0;
 
   body: CANNON.Body;
+  private readonly world: CANNON.World;
+  private readonly listeners = new AbortController();
+  private inputEnabled = true;
 
   private onTitanMeterChange?: (meter: number) => void;
   private onCallTitan?: () => void;
@@ -458,6 +462,7 @@ export class Player {
   constructor(camera: THREE.PerspectiveCamera, scene: THREE.Scene, world: CANNON.World) {
     this.camera = camera;
     this.scene = scene;
+    this.world = world;
     this.group = new THREE.Group();
 
     const shape = new CANNON.Sphere(0.4);
@@ -610,42 +615,130 @@ export class Player {
   }
 
   private setupControls() {
-    document.addEventListener("keydown", (e) => this.onKeyDown(e));
-    document.addEventListener("keyup", (e) => this.onKeyUp(e));
-    document.addEventListener("mousemove", (e) => this.onMouseMove(e));
+    const opts = { signal: this.listeners.signal };
+    document.addEventListener("keydown", (e) => this.onKeyDown(e), opts);
+    document.addEventListener("keyup", (e) => this.onKeyUp(e), opts);
+    document.addEventListener("mousemove", (e) => this.onMouseMove(e), opts);
     document.addEventListener("mousedown", (e) => {
+      if (!this.inputEnabled) return;
       if (e.button === 0) this.keys.fire = true;
       if (e.button === 2) this.mouseADS = true;
-    });
+    }, opts);
     document.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.keys.fire = false;
       if (e.button === 2) this.mouseADS = false;
-    });
-    document.addEventListener("contextmenu", (e) => e.preventDefault());
-    window.addEventListener("gamepadconnected", (e) => { this.gamepadIndex = e.gamepad.index; });
-    window.addEventListener("gamepaddisconnected", () => { this.gamepadIndex = null; });
+    }, opts);
+    document.addEventListener("contextmenu", (e) => e.preventDefault(), opts);
+    window.addEventListener("gamepadconnected", (e) => { this.gamepadIndex = e.gamepad.index; }, opts);
+    window.addEventListener("gamepaddisconnected", () => { this.gamepadIndex = null; }, opts);
+    window.addEventListener("blur", () => this.releaseAllInput(), opts);
     document.addEventListener("wheel", (e) => {
-      if (!document.pointerLockElement) return;
+      if (!this.inputEnabled || !document.pointerLockElement) return;
       if (this.weaponSwitchCooldown > 0) return;
       if (e.deltaY > 0) this.switchWeapon(this.weaponManager.nextWeapon());
       else if (e.deltaY < 0) this.switchWeapon(this.weaponManager.prevWeapon());
-    });
-    const gamepads = navigator.getGamepads();
+    }, opts);
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (let i = 0; i < gamepads.length; i++) { if (gamepads[i]) { this.gamepadIndex = i; break; } }
   }
 
-  tryPickupWeapon(newWeapon: Weapon): Weapon | null {
-    const idx = this.weaponManager.getCurrentIndex();
-    const dropped = this.weaponManager.replaceWeapon(idx, newWeapon);
-    if (dropped) {
-      this.activeWeapon = this.weaponManager.getCurrentWeapon()!;
-      this.weaponSwitchCooldown = 0.3;
-      this.reticleRenderer.setWeapon(this.activeWeapon.name);
-      this.rebuildWeaponMesh();
-      this.updateWeaponHUD();
-      soundManager.playSound('pickup', 0.4);
+  /** Clears held keys/buttons so nothing stays "stuck" after focus loss or pausing. */
+  private releaseAllInput(): void {
+    for (const key of Object.keys(this.keys) as (keyof KeyState)[]) this.keys[key] = false;
+    this.mouseADS = false;
+    this.grenadeHeld = false;
+    this.jumpJustPressed = false;
+    this.crouchJustPressed = false;
+  }
+
+  /**
+   * Enable/disable gameplay input (e.g. while paused or in menus). Disabling also
+   * hides the reticle and radar, whose canvases sit above the menu overlays.
+   */
+  setInputEnabled(enabled: boolean): void {
+    this.inputEnabled = enabled;
+    if (!enabled) {
+      this.releaseAllInput();
+      this.reticleRenderer.hide();
+      this.radarRenderer.hide();
+    } else {
+      this.radarRenderer.show();
+      // Buttons still held from menu navigation (e.g. A on "Resume") must not trigger actions
+      this.gamepadJumpPrev = this.gamepadCrouchPrev = this.gamepadMenuPrev = true;
+      this.gamepadDpadDownPrev = this.gamepadReloadPrev = this.gamepadGrenadePrev = this.gamepadGrapplePrev = true;
     }
-    return dropped;
+  }
+
+  /** True while the pilot is inside a titan (entering, piloting or exiting). */
+  isInTitan(): boolean {
+    return this.isPilotingTitan;
+  }
+
+  hasFreeWeaponSlot(): boolean {
+    return this.weaponManager.getWeaponCount() < MAX_WEAPON_SLOTS;
+  }
+
+  /**
+   * Picks up `newWeapon`. Fills an empty slot if one is available, otherwise
+   * swaps it with the active weapon. Returns whether it was picked up and the
+   * weapon that was dropped (if any), so the caller can leave it in the world.
+   */
+  tryPickupWeapon(newWeapon: Weapon): { pickedUp: boolean; dropped: Weapon | null } {
+    let dropped: Weapon | null = null;
+    if (this.weaponManager.getWeaponCount() < MAX_WEAPON_SLOTS) {
+      this.weaponManager.addWeapon(newWeapon);
+      this.weaponManager.switchTo(this.weaponManager.getWeaponCount() - 1);
+    } else {
+      dropped = this.weaponManager.replaceWeapon(this.weaponManager.getCurrentIndex(), newWeapon);
+      if (!dropped) return { pickedUp: false, dropped: null };
+    }
+    this.activeWeapon = this.weaponManager.getCurrentWeapon()!;
+    this.weaponSwitchCooldown = 0.3;
+    this.crosshairSpread = 0;
+    this.reticleRenderer.setWeapon(this.activeWeapon.name);
+    this.rebuildWeaponMesh();
+    soundManager.playSound('pickup', 0.4);
+    return { pickedUp: true, dropped };
+  }
+
+  /** Fits `attachment` to the active weapon. */
+  equipAttachment(attachment: Attachment): void {
+    this.weaponManager.attach(this.weaponManager.getCurrentIndex(), attachment);
+    this.rebuildWeaponMesh();
+    soundManager.playSound('pickup', 0.4);
+  }
+
+  /** Removes every listener, DOM element, mesh and physics body this player created. */
+  dispose(): void {
+    this.listeners.abort();
+    this.world.removeBody(this.body);
+
+    const removeAndDispose = (object: THREE.Object3D | null) => {
+      if (!object) return;
+      object.parent?.remove(object);
+      disposeObject3D(object);
+    };
+    removeAndDispose(this.weaponMesh);
+    this.weaponMesh = null;
+    removeAndDispose(this.grappleProjectile);
+    this.grappleProjectile = null;
+    removeAndDispose(this.grappleRope);
+    this.grappleRope = null;
+    removeAndDispose(this.grapplePreviewLine);
+    this.grapplePreviewLine = null;
+    removeAndDispose(this.grenadeTrajectoryLine);
+    this.grenadeTrajectoryLine = null;
+    for (const g of this.grenades) {
+      removeAndDispose(g.mesh);
+      removeAndDispose(g.trail);
+    }
+    this.grenades = [];
+    for (const b of this.bullets) this.ballisticsSystem.disposeBullet(b);
+    this.bullets = [];
+    this.impactRenderer.disposeAll();
+    this.reticleRenderer.destroy();
+    this.radarRenderer.destroy();
+    this.group.parent?.remove(this.group);
   }
 
   private switchWeapon(weapon: Weapon | null): void {
@@ -661,8 +754,9 @@ export class Player {
   }
 
   private onKeyDown(e: KeyboardEvent) {
-    if (e.repeat && e.code === 'KeyQ') return;
+    if (!this.inputEnabled) return;
     const b = getBindings();
+    if (e.repeat && (e.code === b.grapple || e.code === b.grenade || e.code === b.reload)) return;
     if (e.code === b.forward) this.keys.forward = true;
     else if (e.code === b.backward) this.keys.backward = true;
     else if (e.code === b.left) this.keys.left = true;
@@ -671,9 +765,9 @@ export class Player {
     else if (e.code === b.sprint) this.keys.sprint = true;
     else if (e.code === b.crouch) { this.keys.crouch = true; this.crouchJustPressed = true; }
     else if (e.code === b.embark) { this.keys.embark = true; this.keyboardEmbarkStartTime = performance.now(); this.hasTriggeredEmbark = false; this.suppressInteractRelease = false; }
-    else if (e.code === 'KeyR') { if (this.weaponManager.startReload()) soundManager.playSound('reload', 0.4); this.updateWeaponHUD(); }
-    else if (e.code === 'KeyG') this.grenadeHeld = true;
-    else if (e.code === 'KeyQ') this.toggleGrapple();
+    else if (e.code === b.reload) { if (!this.isPilotingTitan && this.weaponManager.startReload()) soundManager.playSound('reload', 0.4); }
+    else if (e.code === b.grenade) { if (!this.isPilotingTitan) this.grenadeHeld = true; }
+    else if (e.code === b.grapple) this.toggleGrapple();
     else if (e.code === 'Digit1') this.switchWeapon(this.weaponManager.switchTo(0));
     else if (e.code === 'Digit2') this.switchWeapon(this.weaponManager.switchTo(1));
     else if (e.code === 'Digit3') this.switchWeapon(this.weaponManager.switchTo(2));
@@ -702,7 +796,7 @@ export class Player {
       this.hasTriggeredEmbark = false;
       this.suppressInteractRelease = false;
     }
-    else if (e.code === 'KeyG') { if (this.grenadeHeld) { this.grenadeHeld = false; this.throwGrenade(); } }
+    else if (e.code === b.grenade) { if (this.grenadeHeld) { this.grenadeHeld = false; this.throwGrenade(); } }
   }
 
   private readonly LOOK_SENS_X = 0.002;
@@ -712,7 +806,7 @@ export class Player {
   private readonly TITAN_LOOK_Y_FROM_MOUSE = 0.06;
 
   private onMouseMove(e: MouseEvent) {
-    if (!document.pointerLockElement) return;
+    if (!this.inputEnabled || !document.pointerLockElement) return;
     const sensMult = (this.mouseADS || this.gamepadADS) ? this.ADS_SENS_MULT : 1.0;
     if (this.isPilotingTitan) {
       this.titanMouseLook.x += e.movementX * this.TITAN_LOOK_X_FROM_MOUSE * sensMult;
@@ -726,7 +820,11 @@ export class Player {
     this.euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.euler.x));
   }
 
-  lockPointer() { document.body.requestPointerLock(); }
+  lockPointer() {
+    // Newer browsers return a promise that rejects without a user gesture; that's expected, not an error.
+    const result = document.body.requestPointerLock() as unknown;
+    if (result instanceof Promise) result.catch(() => {});
+  }
 
   setTitanMeterCallback(callback: (meter: number) => void): void { this.onTitanMeterChange = callback; }
   setCallTitanCallback(callback: () => void): void { this.onCallTitan = callback; }
@@ -780,7 +878,7 @@ export class Player {
   getVelocity(): THREE.Vector3 { return this.movement.vel; }
 
   private pollGamepad() {
-    if (this.gamepadIndex === null) return;
+    if (this.gamepadIndex === null || !this.inputEnabled) return;
     const gp = navigator.getGamepads()[this.gamepadIndex];
     if (!gp) return;
     const moveDeadzone = 0.15, lookDeadzone = 0.06, moveSens = 0.6, lookSens = 1.0;
@@ -859,7 +957,7 @@ export class Player {
     this.jumpJustPressed = false; this.crouchJustPressed = false; return input;
   }
 
-  update(delta: number, targets?: any[], enemies?: any[]) {
+  update(delta: number, targets: Damageable[] = [], enemies: Damageable[] = []) {
     this.pollGamepad();
     if (this.isPilotingTitan) { this.updateTitanControls(); this.handleShooting(delta, targets, enemies, false); this.updateGrenades(delta, targets, enemies); this.reticleRenderer.setSpread(0); this.reticleRenderer.render(); this.reticleRenderer.show(); return; }
     if (this.keys.embark) {
@@ -883,7 +981,7 @@ export class Player {
     if (this.body.position.y < -10) { this.body.position.set(0, 5, 0); m.vel.set(0, 0, 0); this.body.velocity.set(0, 0, 0); }
   }
 
-  private handleShooting(delta: number, targets?: any[], enemies?: any[], allowFire: boolean = true) {
+  private handleShooting(delta: number, targets: Damageable[], enemies: Damageable[], allowFire: boolean = true) {
     if (this.weaponSwitchCooldown > 0) this.weaponSwitchCooldown = Math.max(0, this.weaponSwitchCooldown - delta);
     if (this.weaponManager.isReloading()) { if (this.weaponManager.updateReload(delta * 1000)) this.updateWeaponHUD(); }
     if (allowFire && this.weaponSwitchCooldown <= 0 && !this.weaponManager.isReloading() && (this.keys.fire || this.gamepadFire)) {
@@ -894,34 +992,73 @@ export class Player {
       }
     }
     const worldMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
+    const damageables = [...targets, ...enemies];
     for (let i = this.bullets.length - 1; i >= 0; i--) {
-      const b = this.bullets[i]; const prevPos = b.mesh.position.clone(); this.ballisticsSystem.updateBullet(b, delta);
-      const step = b.mesh.position.clone().sub(prevPos); let hit = false; const stepLen = step.length();
+      const b = this.bullets[i];
+      const prevPos = b.mesh.position.clone();
+      this.ballisticsSystem.updateBullet(b, delta);
+      const step = b.mesh.position.clone().sub(prevPos);
+      const stepLen = step.length();
+      let hit = false;
+
+      // Nearest world surface along this frame's path (if any)
+      let wallHit: THREE.Intersection | null = null;
       if (stepLen > 1e-6) {
         const raycaster = new THREE.Raycaster(prevPos, step.clone().normalize(), 0, stepLen);
-        const wallHits = raycaster.intersectObjects(worldMeshes, false);
-        if (wallHits.length > 0 && wallHits[0].distance <= stepLen) {
-          const wallHit = wallHits[0]; b.mesh.position.copy(wallHit.point);
-          const normal = wallHit.face ? wallHit.face.normal.clone().transformDirection((wallHit.object as THREE.Mesh).matrixWorld) : step.clone().normalize().negate();
-          this.impactRenderer.spawnImpact(wallHit.point, normal, PLAYER_IMPACT_CONFIG); hit = true;
-        }
+        wallHit = raycaster.intersectObjects(worldMeshes, false)[0] ?? null;
       }
-      if (!hit && targets) { for (const target of targets) { if (target.checkBulletHit && target.checkBulletHit(b.mesh.position)) { target.takeDamage(this.activeWeapon.damage, b.mesh.position); this.impactRenderer.spawnImpact(b.mesh.position.clone(), b.velocity.clone().normalize().negate(), PLAYER_IMPACT_CONFIG); this.reticleRenderer.showHitmarker(target.health <= 0); hit = true; break; } } }
-      if (!hit && enemies) { for (const enemy of enemies) { if (enemy.checkBulletHit && enemy.checkBulletHit(b.mesh.position)) { enemy.takeDamage(this.activeWeapon.damage, b.mesh.position); this.impactRenderer.spawnImpact(b.mesh.position.clone(), b.velocity.clone().normalize().negate(), PLAYER_IMPACT_CONFIG); this.reticleRenderer.showHitmarker(enemy.health <= 0); hit = true; break; } } }
+
+      // Entities are tested along the whole segment up to the wall, so fast rounds can't tunnel through them
+      const segmentEnd = wallHit ? wallHit.point : b.mesh.position;
+      const entityHit = this.findSegmentHit(prevPos, segmentEnd, damageables);
+      if (entityHit) {
+        b.mesh.position.copy(entityHit.point);
+        entityHit.entity.takeDamage(b.damage, entityHit.point);
+        this.impactRenderer.spawnImpact(entityHit.point.clone(), b.velocity.clone().normalize().negate(), PLAYER_IMPACT_CONFIG);
+        this.reticleRenderer.showHitmarker(entityHit.entity.health <= 0);
+        hit = true;
+      } else if (wallHit) {
+        b.mesh.position.copy(wallHit.point);
+        const normal = wallHit.face ? wallHit.face.normal.clone().transformDirection(wallHit.object.matrixWorld) : step.clone().normalize().negate();
+        this.impactRenderer.spawnImpact(wallHit.point, normal, PLAYER_IMPACT_CONFIG);
+        hit = true;
+      }
+
       if (hit || b.time > b.maxLifetime || b.mesh.position.y < -5) {
         if (hit && b.explosive) {
-          this.impactRenderer.spawnExplosion(b.mesh.position.clone(), EPG_EXPLOSION_CONFIG); soundManager.playSound('explosion', 0.6);
-          const splashR = b.splashRadius;
-          if (splashR > 0) {
-            const impactPos = b.mesh.position;
-            if (targets) { for (const target of targets) { if (target.group && impactPos.distanceTo(target.group.position) < splashR) { const falloff = 1 - impactPos.distanceTo(target.group.position) / splashR; target.takeDamage(Math.round(this.activeWeapon.damage * falloff), impactPos); this.reticleRenderer.showHitmarker(target.health <= 0); } } }
-            if (enemies) { for (const enemy of enemies) { if (enemy.group && impactPos.distanceTo(enemy.group.position) < splashR) { const falloff = 1 - impactPos.distanceTo(enemy.group.position) / splashR; enemy.takeDamage(Math.round(this.activeWeapon.damage * falloff), impactPos); this.reticleRenderer.showHitmarker(enemy.health <= 0); } } }
-          }
+          const impactPos = b.mesh.position.clone();
+          this.impactRenderer.spawnExplosion(impactPos, EPG_EXPLOSION_CONFIG); soundManager.playSound('explosion', 0.6);
+          if (b.splashRadius > 0) this.applySplashDamage(impactPos, b.damage, b.splashRadius, damageables);
         }
         this.ballisticsSystem.disposeBullet(b); this.bullets.splice(i, 1);
       }
     }
     this.impactRenderer.update(delta);
+  }
+
+  /** First entity hit along the segment `from` → `to`, sampled finely enough that no hitbox is skipped. */
+  private findSegmentHit(from: THREE.Vector3, to: THREE.Vector3, entities: Damageable[]): { entity: Damageable; point: THREE.Vector3 } | null {
+    if (entities.length === 0) return null;
+    const length = from.distanceTo(to);
+    const samples = Math.max(1, Math.ceil(length / 0.25));
+    const point = new THREE.Vector3();
+    for (let s = 1; s <= samples; s++) {
+      point.lerpVectors(from, to, s / samples);
+      for (const entity of entities) {
+        if (entity.health > 0 && entity.checkBulletHit(point)) return { entity, point: point.clone() };
+      }
+    }
+    return null;
+  }
+
+  private applySplashDamage(center: THREE.Vector3, damage: number, radius: number, entities: Damageable[]): void {
+    for (const entity of entities) {
+      if (entity.health <= 0) continue;
+      const amount = splashDamage(damage, center.distanceTo(entity.group.position), radius);
+      if (amount <= 0) continue;
+      entity.takeDamage(amount, center);
+      this.reticleRenderer.showHitmarker(entity.health <= 0);
+    }
   }
 
   private updateAiming(delta: number): void {
@@ -937,9 +1074,9 @@ export class Player {
   }
 
   takeDamage(amount: number, sourcePosition?: THREE.Vector3) {
+    if (this.health <= 0) return;
     this.health = Math.max(0, this.health - amount); soundManager.playSound('hit', 0.5);
     if (sourcePosition) this.radarRenderer.showDamageDirection(sourcePosition, this.group.position, this.euler.y);
-    if (this.health <= 0) setTimeout(() => { this.body.position.set(0, 5, 0); this.movement.vel.set(0, 0, 0); this.body.velocity.set(0, 0, 0); this.health = 100; }, 2000);
   }
 
   updateRadar(enemies: { position: THREE.Vector3; velocity?: THREE.Vector3 }[]): void { this.radarRenderer.updateEnemies(enemies, this.group.position, this.euler.y); }
@@ -950,17 +1087,21 @@ export class Player {
     const startPos = this.getWeaponMuzzlePosition(aimDir);
     const pellets = weapon.bulletsPerShot, isADS = this.isADSActive(), spreadRad = (weapon.spread * (isADS ? 0.3 : 1.0) * Math.PI) / 180;
     const cameraAimPoint = this.getCameraAimPoint(weapon, aimDir);
+    const damage = this.weaponManager.getEffectiveDamage(weapon);
     for (let p = 0; p < pellets; p++) {
       const shotDir = this.getShotDirection(weapon, aimDir, spreadRad, p, pellets);
       const pelletTarget = pellets > 1
         ? this.camera.position.clone().add(shotDir.clone().multiplyScalar(weapon.range))
         : cameraAimPoint;
       const velocity = this.getProjectileVelocity(weapon, startPos, shotDir, pelletTarget, isADS);
-      this.bullets.push(this.ballisticsSystem.createBullet(startPos, velocity, weapon.bulletVisuals));
+      const bullet = this.ballisticsSystem.createBullet(startPos, velocity, weapon.bulletVisuals);
+      bullet.damage = damage;
+      this.bullets.push(bullet);
     }
     const recoilMult = isADS ? 0.5 : 1.0;
-    this.crosshairSpread = Math.min(12, this.crosshairSpread + weapon.recoil.y * 2 * recoilMult);
-    this.weaponRecoilKick = Math.min(1, this.weaponRecoilKick + weapon.recoil.y * 0.25 * recoilMult);
+    const recoil = this.weaponManager.getEffectiveRecoil(weapon);
+    this.crosshairSpread = Math.min(12, this.crosshairSpread + recoil.y * 2 * recoilMult);
+    this.weaponRecoilKick = Math.min(1, this.weaponRecoilKick + recoil.y * 0.25 * recoilMult);
     if (weapon.muzzleFlash) this.impactRenderer.spawnMuzzleFlash(startPos, aimDir, DEFAULT_MUZZLE_CONFIG);
     soundManager.playSound(weapon.soundId, 0.4);
     this.titanMeter = Math.min(100, this.titanMeter + 0.5); if (this.onTitanMeterChange) this.onTitanMeterChange(this.titanMeter);
@@ -1181,7 +1322,7 @@ export class Player {
     this.updateWeaponHUD();
   }
 
-  private updateGrenades(delta: number, targets?: any[], enemies?: any[]): void {
+  private updateGrenades(delta: number, targets: Damageable[], enemies: Damageable[]): void {
     if (this.grenadeCooldown > 0) this.grenadeCooldown = Math.max(0, this.grenadeCooldown - delta);
     if (this.grenadeCount < this.maxGrenades) { this.grenadeRegenTime += delta; if (this.grenadeRegenTime >= this.GRENADE_REGEN_DURATION) { this.grenadeCount++; this.grenadeRegenTime = 0; this.updateWeaponHUD(); } }
     const worldMeshes = BallisticsSystem.getCollisionMeshes(this.scene, this.group, this.bullets);
@@ -1204,9 +1345,7 @@ export class Player {
       if (g.fuseTime <= 0 || g.mesh.position.y < -20) {
         if (g.fuseTime <= 0) {
           const pos = g.mesh.position.clone(); this.impactRenderer.spawnExplosion(pos, FRAG_EXPLOSION_CONFIG); soundManager.playSound('explosion', 0.6);
-          const splashR = 6, damage = 100;
-          if (targets) { for (const t of targets) { if (t.group && pos.distanceTo(t.group.position) < splashR) { t.takeDamage(Math.round(damage * (1 - pos.distanceTo(t.group.position) / splashR)), pos); this.reticleRenderer.showHitmarker(t.health <= 0); } } }
-          if (enemies) { for (const e of enemies) { if (e.group && pos.distanceTo(e.group.position) < splashR) { e.takeDamage(Math.round(damage * (1 - pos.distanceTo(e.group.position) / splashR)), pos); this.reticleRenderer.showHitmarker(e.health <= 0); } } }
+          this.applySplashDamage(pos, 100, 6, [...targets, ...enemies]);
         }
         this.scene.remove(g.mesh); g.mesh.geometry.dispose(); (g.mesh.material as THREE.Material).dispose();
         this.scene.remove(g.trail); g.trail.geometry.dispose(); (g.trail.material as THREE.Material).dispose();

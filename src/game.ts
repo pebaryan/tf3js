@@ -8,9 +8,9 @@ import { Player, createWeaponMesh } from './player';
 import { Titan, TitanState } from './titan';
 import { GameState, GameStats } from './types';
 import { GameUI } from './ui';
-import { Weapon, Attachment, ATTACHMENTS, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
+import { Weapon, Attachment, ATTACHMENTS, cloneWeapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
 import { getBindings, keyCodeToLabel } from './keybindings';
-// import { soundManager } from './sound';
+import { disposeObject3D } from './collision';
 
 interface WeaponPickup {
   weapon: Weapon;
@@ -25,9 +25,30 @@ interface AttachmentPickup {
   mesh: THREE.Group;
   position: THREE.Vector3;
   baseY: number;
-  cooldown: number;
+  taken: boolean;
 }
 
+export interface CapturePoint {
+  position: THREE.Vector3;
+  captured: boolean;
+  timer: number;
+}
+
+export interface Checkpoint {
+  position: THREE.Vector3;
+  completed: boolean;
+}
+
+/** Seconds a capture point must be held before it starts contributing to the objective. */
+const CAPTURE_LOCK_TIME = 3;
+/** Total hold time needed to win a capture level. */
+const CAPTURE_WIN_TIME = 30;
+const CAPTURE_RADIUS = 3;
+const CHECKPOINT_RADIUS = 4;
+const TITAN_EMBARK_RANGE = 3;
+/** Enemy bullet damage applied to the pilot (titan hull takes the same, shields first). */
+const ENEMY_BULLET_DAMAGE = 8;
+const PLAYER_HITBOX_RADIUS = 0.5;
 
 export class Game {
   scene!: THREE.Scene;
@@ -38,12 +59,11 @@ export class Game {
   clock!: THREE.Clock;
   targets: Target[] = [];
   enemies: Enemy[] = [];
-  capturePoints: any[] = [];
-  checkpoints: any[] = [];
+  capturePoints: CapturePoint[] = [];
+  checkpoints: Checkpoint[] = [];
   titan: Titan | null = null;
   private weaponPickups: WeaponPickup[] = [];
   private attachmentPickups: AttachmentPickup[] = [];
-  private pickupPromptEl: HTMLElement | null = null;
   private activePickupHoldTime = 0;
   private readonly PICKUP_RANGE = 2;
   private readonly PICKUP_PROMPT_RANGE = 4;
@@ -53,18 +73,18 @@ export class Game {
   state: GameState = GameState.MAIN_MENU;
   currentLevel: Level | null = null;
   stats: GameStats;
-  levelStartTime: number = 0;
   scoreMultiplier: number = 1;
   levels: Level[] = LEVELS;
 
   private gameContainer: HTMLElement;
-  private ambientLight!: THREE.AmbientLight;
-  private directionalLight!: THREE.DirectionalLight;
+  /** Scene objects that survive level changes (camera, lights). */
+  private persistentObjects = new Set<THREE.Object3D>();
   private ui: GameUI;
 
   private capturedTime = 0;
   private checkpointProgress = 0;
-  private lastEmbarkIndicatorState = false;
+  private survivalSpawnTimer = 0;
+  private lastPauseToggle = 0;
 
   private getTargetSpawnPositions(): THREE.Vector3[] {
     if (!this.currentLevel) return [];
@@ -120,6 +140,21 @@ export class Game {
       () => { if (this.state === GameState.PLAYING || this.state === GameState.PAUSED) this.togglePause(); },
       () => { if (this.state === GameState.PLAYING) this.callTitan(); }
     );
+
+    // Clicking the canvas re-captures the mouse if pointer lock was lost
+    this.renderer.domElement.addEventListener('click', () => {
+      if (this.state === GameState.PLAYING && !document.pointerLockElement) {
+        this.player?.lockPointer();
+      }
+    });
+
+    // Losing pointer lock mid-game (Esc, alt-tab) pauses, like any desktop FPS
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement && this.state === GameState.PLAYING) {
+        this.togglePause();
+      }
+    });
+
     this.showMainMenu();
     this.animate();
   }
@@ -150,22 +185,24 @@ export class Game {
     const hemiLight = new THREE.HemisphereLight(0xbadcf5, 0xffffff, 0.9);
     this.scene.add(hemiLight);
 
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.2); // Lower ambient for better shadows
-    this.scene.add(this.ambientLight);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.2); // Lower ambient for better shadows
+    this.scene.add(ambientLight);
 
     // Sun-like directional light — very bright, clear simulation sun
-    this.directionalLight = new THREE.DirectionalLight(0xffffff, 2.2); // Stronger directional for contrast
-    this.directionalLight.position.set(-40, 60, -50);
-    this.directionalLight.castShadow = true;
-    this.directionalLight.shadow.mapSize.width = 2048;
-    this.directionalLight.shadow.mapSize.height = 2048;
-    this.directionalLight.shadow.camera.near = 10;
-    this.directionalLight.shadow.camera.far = 200;
-    this.directionalLight.shadow.camera.left = -50;
-    this.directionalLight.shadow.camera.right = 50;
-    this.directionalLight.shadow.camera.top = 50;
-    this.directionalLight.shadow.camera.bottom = -50;
-    this.scene.add(this.directionalLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 2.2); // Stronger directional for contrast
+    directionalLight.position.set(-40, 60, -50);
+    directionalLight.castShadow = true;
+    directionalLight.shadow.mapSize.width = 2048;
+    directionalLight.shadow.mapSize.height = 2048;
+    directionalLight.shadow.camera.near = 10;
+    directionalLight.shadow.camera.far = 200;
+    directionalLight.shadow.camera.left = -50;
+    directionalLight.shadow.camera.right = 50;
+    directionalLight.shadow.camera.top = 50;
+    directionalLight.shadow.camera.bottom = -50;
+    this.scene.add(directionalLight);
+
+    this.persistentObjects = new Set<THREE.Object3D>([this.camera, hemiLight, ambientLight, directionalLight]);
 
     this.world = new CANNON.World();
     this.world.gravity.set(0, 0, 0);
@@ -233,63 +270,41 @@ export class Game {
 
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    raycaster.far = 100;
 
-    const meshes: THREE.Object3D[] = [];
-    this.scene.traverse((child) => {
-      if ((child instanceof THREE.Mesh || child instanceof THREE.Group) && child !== this.titan?.group) {
-        meshes.push(child);
-      }
-    });
-
-    const intersects = raycaster.intersectObjects(meshes);
+    const intersects = raycaster.intersectObjects(this.getWorldMeshes(), false);
     let spawnPos: THREE.Vector3;
 
-    if (intersects.length > 0 && intersects[0].distance < 100) {
-      spawnPos = intersects[0].point;
+    if (intersects.length > 0) {
+      spawnPos = intersects[0].point.clone();
     } else {
-      const playerPos = this.player.group.position.clone();
-      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.player.group.quaternion);
-      spawnPos = playerPos.clone().add(forward.multiplyScalar(20));
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+      forward.y = 0;
+      if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+      spawnPos = this.player.group.position.clone().add(forward.normalize().multiplyScalar(20));
       spawnPos.y = 0;
     }
 
     this.createTitanCallAnimation(spawnPos);
 
+    // Replace a previously destroyed titan
+    this.titan?.dispose();
     this.titan = new Titan(this.scene, this.world, spawnPos);
     this.titan.call(spawnPos);
 
     // Reset titan meter in both stats and player
     this.stats.titanMeter = 0;
-    this.player?.resetTitanMeter();
+    this.player.resetTitanMeter();
     this.addScore(500);
   }
 
   embarkTitan(): void {
-    console.log('embarkTitan called');
-    if (!this.player || !this.titan) {
-      console.log('embarkTitan: No player or titan');
-      return;
-    }
-    
-    // Check if player is close to the titan (within 3 meters)
-    const distance = this.player.group.position.distanceTo(this.titan.group.position);
-    console.log('embarkTitan: Distance to titan:', distance, 'meters');
-    if (distance > 3) {
-      console.log('embarkTitan: Too far from titan');
-      return;
-    }
-    
-    // Check if titan is ready to be embarked
-    console.log('embarkTitan: Titan state:', this.titan.state);
-    if (this.titan.state !== TitanState.READY) {
-      console.log('embarkTitan: Titan not ready');
-      return;
-    }
-    
-    console.log('embarkTitan: Success! Entering titan...');
-    // Enter the titan
+    if (!this.player || !this.titan) return;
+    if (this.titan.state !== TitanState.READY) return;
+    if (this.player.group.position.distanceTo(this.titan.group.position) > TITAN_EMBARK_RANGE) return;
+
     this.titan.enter();
-    
+
     // Hide player model and enable piloting mode
     this.player.group.visible = false;
     this.player.setPilotingState(true);
@@ -304,143 +319,89 @@ export class Game {
     // Set callback for when fade-out completes (screen is black)
     this.titan.setExitFadedOutCallback(() => {
       if (!this.player || !this.titan) return;
-
-      // Position player near the titan when exiting
-      const titanPos = this.titan.group.position.clone();
-      const exitOffset = new THREE.Vector3(0, 0, 4).applyAxisAngle(
-        new THREE.Vector3(0, 1, 0),
-        this.titan.group.rotation.y
-      );
-      this.player.body.position.set(
-        titanPos.x + exitOffset.x,
-        titanPos.y + 0.5,
-        titanPos.z + exitOffset.z
-      );
-
-      // Show player model again and disable piloting mode
-      this.player.group.visible = true;
-      this.player.setPilotingState(false);
-
-      // Reset player velocity with slight upward boost (ejection)
-      this.player.setVelocity(exitOffset.x * 2, 5, exitOffset.z * 2);
+      this.ejectPilot(this.titan, new THREE.Vector3(0, 5, 0));
     });
 
     // Start the exit sequence (fade out → callback → fade in)
     this.titan.exit();
   }
 
+  /** Put the pilot back on foot next to `titan`, with an optional launch velocity. */
+  private ejectPilot(titan: Titan, launch: THREE.Vector3): void {
+    const exitOffset = new THREE.Vector3(0, 0, 4).applyAxisAngle(new THREE.Vector3(0, 1, 0), titan.group.rotation.y);
+    const titanPos = titan.group.position;
+    this.player.body.position.set(titanPos.x + exitOffset.x, titanPos.y + 0.5, titanPos.z + exitOffset.z);
+
+    this.player.group.visible = true;
+    this.player.setPilotingState(false);
+    this.player.setVelocity(exitOffset.x * 2 + launch.x, launch.y, exitOffset.z * 2 + launch.z);
+  }
+
   private createTitanCallAnimation(position: THREE.Vector3): void {
-    const ringGeo = new THREE.RingGeometry(0.5, 1, 32);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x00ffcc,
-      transparent: true,
-      opacity: 0.8,
-      side: THREE.DoubleSide
-    });
-    const ring = new THREE.Mesh(ringGeo, ringMat);
+    const spawnRing = (delayMs: number, spin: number) => {
+      const ringGeo = new THREE.RingGeometry(0.5, 1, 32);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0x00ffcc,
+        transparent: true,
+        opacity: 0.8,
+        side: THREE.DoubleSide
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.position.set(position.x, 0.1, position.z);
+      ring.rotation.x = -Math.PI / 2;
+      ring.rotation.z = Math.random() * Math.PI * 2;
+      ring.userData.ignoreRaycast = true;
 
-    ring.position.copy(position);
-    ring.position.y = 0.1;
-    ring.rotation.x = -Math.PI / 2;
-    ring.rotation.z = Math.random() * Math.PI * 2;
-
-    this.scene.add(ring);
-
-    const startTime = Date.now();
-    const duration = 2000;
-
-    const animateRing = () => {
-      const elapsed = Date.now() - startTime;
-      const progress = elapsed / duration;
-
-      if (progress >= 1) {
-        this.scene.remove(ring);
-        ring.geometry.dispose();
-        ringMat.dispose();
-        return;
-      }
-
-      const scale = 1 + progress * 20;
-      ring.scale.set(scale, scale, 1);
-      ringMat.opacity = 0.8 * (1 - progress);
-      ring.rotation.z += 0.05;
-
-      requestAnimationFrame(animateRing);
-    };
-
-    animateRing();
-
-    setTimeout(() => {
-      const ring2 = ring.clone();
-      ring2.material = ringMat.clone();
-      this.scene.add(ring2);
-
-      const startTime2 = Date.now();
-      const animateRing2 = () => {
-        const elapsed = Date.now() - startTime2;
-        const progress = elapsed / duration;
-
+      const duration = 2000;
+      let startTime = 0;
+      const animateRing = (now: number) => {
+        if (!ring.parent) return; // level was torn down
+        if (!startTime) startTime = now;
+        const progress = (now - startTime) / duration;
         if (progress >= 1) {
-          this.scene.remove(ring2);
-          ring2.geometry.dispose();
-          (ring2.material as THREE.Material).dispose();
+          this.scene.remove(ring);
+          ringGeo.dispose();
+          ringMat.dispose();
           return;
         }
-
         const scale = 1 + progress * 20;
-        ring2.scale.set(scale, scale, 1);
-        (ring2.material as THREE.MeshBasicMaterial).opacity = 0.8 * (1 - progress);
-        ring2.rotation.z -= 0.05;
-
-        requestAnimationFrame(animateRing2);
+        ring.scale.set(scale, scale, 1);
+        ringMat.opacity = 0.8 * (1 - progress);
+        ring.rotation.z += spin;
+        requestAnimationFrame(animateRing);
       };
 
-      animateRing2();
-    }, 300);
+      window.setTimeout(() => {
+        this.scene.add(ring);
+        requestAnimationFrame(animateRing);
+      }, delayMs);
+    };
+
+    spawnRing(0, 0.05);
+    spawnRing(300, -0.05);
   }
 
   startGame(levelId: number = 1) {
     this.state = GameState.PLAYING;
     this.currentLevel = this.levels.find(l => l.id === levelId) || this.levels[0];
-    this.stats.level = levelId;
+    this.stats.level = this.currentLevel.id;
     this.stats.score = 0;
     this.stats.kills = 0;
     this.stats.time = 0;
     this.stats.objectivesCompleted = 0;
     this.stats.titanMeter = 100;
     this.stats.health = 100;
-    this.levelStartTime = Date.now();
     this.scoreMultiplier = 1;
-    this.targets.forEach((target) => target.dispose());
-    this.targets = [];
-    this.enemies = [];
-    this.capturePoints = [];
-    this.checkpoints = [];
     this.capturedTime = 0;
     this.checkpointProgress = 0;
-    this.weaponPickups = [];
+    this.survivalSpawnTimer = 0;
+    this.activePickupHoldTime = 0;
 
-    // Clear existing scene (keep lights)
-    const children = [...this.scene.children];
-    children.forEach(child => {
-      if (child !== this.ambientLight && child !== this.directionalLight) {
-        this.scene.remove(child);
-      }
-    });
-    while (this.world.bodies.length > 0) {
-      this.world.removeBody(this.world.bodies[0]);
-    }
-
-    if (this.titan) {
-      this.titan.dispose();
-      this.titan = null;
-    }
+    this.teardownLevel();
 
     createLevel(this.scene, this.world, this.currentLevel);
 
-    console.log('[Game] Creating player...');
     this.player = new Player(this.camera, this.scene, this.world);
-    console.log('[Game] Player created, group children:', this.player.group.children.length);
     this.player.setTitanMeterCallback((meter) => {
       this.stats.titanMeter = meter;
     });
@@ -474,13 +435,38 @@ export class Game {
     this.setupObjectives();
     this.player.lockPointer();
 
-    this.renderer.domElement.addEventListener('click', () => {
-      if (this.state === GameState.PLAYING && !document.pointerLockElement) {
-        this.player.lockPointer();
-      }
-    });
-
     this.ui.hideMenus();
+    this.ui.showEmbarkIndicator(false);
+    this.clock.getDelta(); // don't count menu time in the first frame
+  }
+
+  /** Remove and free everything belonging to the current level, keeping camera and lights. */
+  private teardownLevel(): void {
+    this.targets.forEach((target) => target.dispose());
+    this.targets = [];
+    this.enemies.forEach((enemy) => enemy.dispose());
+    this.enemies = [];
+    this.capturePoints = [];
+    this.checkpoints = [];
+    this.weaponPickups = [];
+    this.attachmentPickups = [];
+
+    if (this.titan) {
+      this.titan.dispose();
+      this.titan = null;
+    }
+    if (this.player) {
+      this.player.dispose();
+    }
+
+    for (const child of [...this.scene.children]) {
+      if (this.persistentObjects.has(child)) continue;
+      this.scene.remove(child);
+      disposeObject3D(child);
+    }
+    while (this.world.bodies.length > 0) {
+      this.world.removeBody(this.world.bodies[0]);
+    }
   }
 
   private setupObjectives() {
@@ -491,10 +477,8 @@ export class Game {
       case LevelType.RACE:
         this.setupCheckpoints();
         break;
-      case LevelType.SURVIVAL:
-        this.setupEnemies();
-        break;
     }
+    this.setupEnemies();
     this.updateHUD();
   }
 
@@ -530,6 +514,8 @@ export class Game {
     this.checkpoints.forEach((checkpoint, index) => {
       const mesh = new THREE.Mesh(checkpointGeo, checkpointMat);
       mesh.position.copy(checkpoint.position);
+      // Rings are markers, not geometry: don't let them stop bullets or feet
+      mesh.userData.ignoreRaycast = true;
       this.scene.add(mesh);
 
       const canvas = document.createElement('canvas');
@@ -587,107 +573,124 @@ export class Game {
     });
   }
 
-  private setupEnemies() {
-    for (let i = 0; i < this.currentLevel!.enemyCount; i++) {
-      const x = (i % 3) * 10 - 10;
-      const z = Math.floor(i / 3) * 10 - 30;
-      const position = new THREE.Vector3(x, 1.8, z);
+  /** Starting enemy positions per level type (feet on the ground, y = 0). */
+  private getEnemySpawnPositions(type: LevelType): THREE.Vector3[] {
+    switch (type) {
+      case LevelType.SURVIVAL:
+        // Inside the survival arena (walls at x = ±20, back wall at z = -60)
+        return [
+          new THREE.Vector3(-10, 0, -30), new THREE.Vector3(0, 0, -30), new THREE.Vector3(10, 0, -30),
+          new THREE.Vector3(-10, 0, -20), new THREE.Vector3(0, 0, -20), new THREE.Vector3(10, 0, -20),
+        ];
+      case LevelType.CAPTURE:
+        // Guarding the capture points
+        return [
+          new THREE.Vector3(-15, 0, 38), new THREE.Vector3(15, 0, 38),
+          new THREE.Vector3(-8, 0, 44), new THREE.Vector3(8, 0, 44),
+        ];
+      case LevelType.RACE:
+        // Harassing the course, off to the side of the checkpoints
+        return [new THREE.Vector3(-12, 0, -40), new THREE.Vector3(12, 0, -65)];
+      default:
+        return [];
+    }
+  }
 
+  private setupEnemies() {
+    const level = this.currentLevel!;
+    const positions = this.getEnemySpawnPositions(level.type);
+    for (let i = 0; i < level.enemyCount && positions.length > 0; i++) {
+      const position = positions[i % positions.length].clone();
       const diff = 0.3 + Math.random() * 0.4; // 0.3-0.7
-      const enemy = new Enemy(this.scene, this.world, position, {
+      this.enemies.push(new Enemy(this.scene, this.world, position, {
         health: 50,
         speed: 1.5,
-        aggressive: false,
+        aggressive: level.type !== LevelType.RACE,
         attackCooldown: 2,
         difficulty: diff,
-      });
-
-      this.enemies.push(enemy);
+      }));
     }
   }
 
   update(delta: number) {
     if (!this.player || !this.currentLevel) return;
 
+    this.stats.time += delta;
     this.world.step(1 / 60, delta, 4);
 
     this.player.update(delta, this.targets, this.enemies);
     this.targets.forEach(target => target.update(delta, this.camera.position));
-    
+
     // Update level-specific visuals (like pulsing neon strips)
     updateLevelVisuals(performance.now() * 0.001);
 
     // Update radar with enemy positions
-    const enemyData = this.enemies.map(e => ({
-      position: e.group.position.clone(),
-      velocity: e.body?.velocity ? new THREE.Vector3(e.body.velocity.x, e.body.velocity.y, e.body.velocity.z) : undefined
-    }));
-    this.player.updateRadar(enemyData);
+    this.player.updateRadar(this.enemies.map(e => ({ position: e.group.position })));
     this.player.renderRadar();
 
     this.updateObjectives(delta);
     this.updateEnemies(delta);
-
-    if (this.titan) {
-      this.titan.update(delta, this.targets, this.enemies);
-      this.titan.updatePhysicsPosition();
-      let titanCockpitActive = false;
-      let titanAds = false;
-
-      // Check if player is near titan and can embark, or if piloting
-      if (this.player) {
-        const distance = this.player.group.position.distanceTo(this.titan.group.position);
-        const canEmbark = this.titan.state === TitanState.READY && distance <= 3;
-        const isPiloting = this.titan.state === TitanState.PILOTING || this.titan.state === TitanState.ENTERING;
-        
-        // Only log when state changes to avoid spam
-        if (canEmbark !== this.lastEmbarkIndicatorState) {
-          console.log('Embark check - State:', this.titan.state, 'Distance:', distance.toFixed(2), 'Can embark:', canEmbark, 'Is piloting:', isPiloting);
-          this.lastEmbarkIndicatorState = canEmbark;
-        }
-        
-        this.ui.showEmbarkIndicator(canEmbark);
-        this.ui.showPilotingIndicator(isPiloting);
-        if (isPiloting) {
-          this.player.syncToTitan(this.titan.group.position, this.titan.group.rotation.y);
-        }
-        
-        // When piloting, sync camera to titan cockpit
-        if (this.titan.state === TitanState.PILOTING) {
-          const cockpit = this.titan.getCockpitCamera();
-          this.camera.position.copy(cockpit.position);
-          this.camera.rotation.set(cockpit.rotation.x, cockpit.rotation.y, cockpit.rotation.z, 'YXZ');
-          titanAds = this.player.isADSActive();
-          const targetFov = titanAds ? 58 : 75;
-          this.camera.fov += (targetFov - this.camera.fov) * 0.18;
-          this.camera.updateProjectionMatrix();
-          titanCockpitActive = true;
-        } else {
-          this.titan.hideCockpitWeapon();
-        }
-      } else {
-        this.ui.showEmbarkIndicator(false);
-        this.ui.showPilotingIndicator(false);
-        this.lastEmbarkIndicatorState = false;
-        this.titan.hideCockpitWeapon();
-      }
-
-      const shakeIntensity = this.titan.getShakeIntensity();
-      if (shakeIntensity > 0.01) {
-        this.camera.position.x += (Math.random() - 0.5) * shakeIntensity * 0.3;
-        this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
-      }
-      if (titanCockpitActive) {
-        this.titan.syncCockpitWeapon(this.camera, titanAds, delta);
-      }
-    } else {
-      this.ui.showEmbarkIndicator(false);
-    }
+    this.updateTitan(delta);
 
     this.updateInteractions(delta);
     this.updateHUD();
     this.checkLevelCompletion();
-    this.stats.time = (Date.now() - this.levelStartTime) / 1000;
+  }
+
+  private isPiloting(): boolean {
+    return !!this.titan && (this.titan.state === TitanState.PILOTING || this.titan.state === TitanState.ENTERING);
+  }
+
+  private updateTitan(delta: number): void {
+    const titan = this.titan;
+    if (!titan) {
+      this.ui.showEmbarkIndicator(false);
+      return;
+    }
+
+    titan.update(delta, this.targets, this.enemies);
+    titan.updatePhysicsPosition();
+
+    // Titan destroyed with the pilot inside: eject
+    if (titan.state === TitanState.DESTROYED && this.player.isInTitan()) {
+      this.ejectPilot(titan, new THREE.Vector3(0, 12, 0));
+      this.camera.fov = 75;
+      this.camera.updateProjectionMatrix();
+    }
+
+    let titanCockpitActive = false;
+    let titanAds = false;
+
+    const distance = this.player.group.position.distanceTo(titan.group.position);
+    const canEmbark = titan.state === TitanState.READY && distance <= TITAN_EMBARK_RANGE;
+    this.ui.showEmbarkIndicator(canEmbark);
+    this.ui.showPilotingIndicator(this.isPiloting());
+    if (this.isPiloting()) {
+      this.player.syncToTitan(titan.group.position, titan.group.rotation.y);
+    }
+
+    // When piloting, sync camera to titan cockpit
+    if (titan.state === TitanState.PILOTING) {
+      const cockpit = titan.getCockpitCamera();
+      this.camera.position.copy(cockpit.position);
+      this.camera.rotation.set(cockpit.rotation.x, cockpit.rotation.y, cockpit.rotation.z, 'YXZ');
+      titanAds = this.player.isADSActive();
+      const targetFov = titanAds ? 58 : 75;
+      this.camera.fov += (targetFov - this.camera.fov) * 0.18;
+      this.camera.updateProjectionMatrix();
+      titanCockpitActive = true;
+    } else {
+      titan.hideCockpitWeapon();
+    }
+
+    const shakeIntensity = titan.getShakeIntensity();
+    if (shakeIntensity > 0.01) {
+      this.camera.position.x += (Math.random() - 0.5) * shakeIntensity * 0.3;
+      this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
+    }
+    if (titanCockpitActive) {
+      titan.syncCockpitWeapon(this.camera, titanAds, delta);
+    }
   }
 
   private spawnWeaponPickups() {
@@ -705,8 +708,8 @@ export class Game {
     ];
 
     for (const def of pickupDefs) {
-      const pickup = this.createPickupMesh(def.weapon, def.pos);
-      this.weaponPickups.push(pickup);
+      // Each pickup owns its own copy so attachments on one never show up on another
+      this.weaponPickups.push(this.createPickupMesh(cloneWeapon(def.weapon), def.pos));
 
       // Randomly spawn an attachment nearby
       if (Math.random() > 0.4) {
@@ -749,7 +752,7 @@ export class Game {
       mesh: group,
       position: position.clone(),
       baseY: position.y,
-      cooldown: 0
+      taken: false,
     });
   }
 
@@ -772,9 +775,6 @@ export class Game {
     });
     const aura = new THREE.Mesh(auraGeo, auraMat);
     gunGroup.add(aura);
-
-    gunGroup.position.y = 0.5;
-    group.add(gunGroup);
 
     // Base ring glow - wider and brighter
     const ringGeo = new THREE.TorusGeometry(0.5, 0.04, 8, 32);
@@ -812,21 +812,14 @@ export class Game {
     };
   }
 
-  private rebuildPickupMesh(pickup: WeaponPickup) {
-    // Remove old mesh children
-    while (pickup.mesh.children.length > 0) {
-      const child = pickup.mesh.children[0];
-      pickup.mesh.remove(child);
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        (child.material as THREE.Material).dispose();
-      }
-    }
-    this.scene.remove(pickup.mesh);
+  private removePickupMesh(mesh: THREE.Object3D): void {
+    this.scene.remove(mesh);
+    disposeObject3D(mesh);
+  }
 
-    // Create new pickup with updated weapon
-    const newPickup = this.createPickupMesh(pickup.weapon, pickup.position);
-    pickup.mesh = newPickup.mesh;
+  private rebuildPickupMesh(pickup: WeaponPickup) {
+    this.removePickupMesh(pickup.mesh);
+    pickup.mesh = this.createPickupMesh(pickup.weapon, pickup.position).mesh;
   }
 
   private updateInteractions(delta: number) {
@@ -834,6 +827,7 @@ export class Game {
 
     const time = performance.now() * 0.001;
     const playerPos = this.player.group.position;
+    const piloting = this.isPiloting();
 
     let nearestWeapon: WeaponPickup | null = null;
     let nearestWeaponDist = Infinity;
@@ -855,11 +849,7 @@ export class Game {
     let nearestAtt: AttachmentPickup | null = null;
     let nearestAttDist = Infinity;
     for (const pickup of this.attachmentPickups) {
-      if (pickup.cooldown > 0) {
-        pickup.cooldown -= delta;
-        pickup.mesh.visible = pickup.cooldown <= 0;
-        continue;
-      }
+      if (pickup.taken) continue;
       pickup.mesh.rotation.y += 3.0 * delta;
       pickup.mesh.position.y = pickup.baseY + Math.sin(time * 4) * 0.05;
       const dist = playerPos.distanceTo(pickup.position);
@@ -870,47 +860,36 @@ export class Game {
     }
 
     let canEmbark = false;
-    let titanDist = Infinity;
     if (this.titan && this.titan.state === TitanState.READY) {
-      titanDist = playerPos.distanceTo(this.titan.group.position);
-      canEmbark = titanDist <= 3;
+      canEmbark = playerPos.distanceTo(this.titan.group.position) <= TITAN_EMBARK_RANGE;
     }
 
-    // Prioritization: Titan > Weapon > Attachment
+    // Prioritization: Titan > Weapon > Attachment. No pickups from inside a titan.
     let bestAction: 'titan' | 'weapon' | 'attachment' | null = null;
     if (canEmbark) {
       bestAction = 'titan';
-    } else if (nearestWeapon && nearestWeaponDist < this.PICKUP_RANGE) {
+    } else if (!piloting && nearestWeapon && nearestWeaponDist < this.PICKUP_RANGE) {
       bestAction = 'weapon';
-    } else if (nearestAtt && nearestAttDist < this.PICKUP_RANGE) {
+    } else if (!piloting && nearestAtt && nearestAttDist < this.PICKUP_RANGE) {
       bestAction = 'attachment';
     }
 
     // Interaction Logic
     const isInteracting = !!bestAction && this.player.isInteractHeld() && !this.player.isInteractConsumed();
+    const requiredTime = bestAction === 'titan' ? this.TITAN_EMBARK_HOLD_TIME : this.PICKUP_HOLD_TIME;
 
     if (isInteracting) {
       this.activePickupHoldTime += delta;
-      const requiredTime = (bestAction === 'titan') ? this.TITAN_EMBARK_HOLD_TIME : this.PICKUP_HOLD_TIME;
 
       if (this.activePickupHoldTime >= requiredTime) {
         if (bestAction === 'titan') {
           this.embarkTitan();
         } else if (bestAction === 'weapon' && nearestWeapon) {
-          const dropped = this.player.tryPickupWeapon(nearestWeapon.weapon);
-          if (dropped) {
-            nearestWeapon.weapon = dropped;
-            this.rebuildPickupMesh(nearestWeapon);
-            nearestWeapon.cooldown = 0.5;
-            nearestWeapon.mesh.visible = false;
-          }
+          this.pickUpWeapon(nearestWeapon);
         } else if (bestAction === 'attachment' && nearestAtt) {
-          const weaponIdx = this.player['weaponManager'].getCurrentIndex();
-          this.player['weaponManager'].attach(weaponIdx, nearestAtt.attachment);
-          this.player['rebuildWeaponMesh']();
-          this.player['updateWeaponHUD']();
-          nearestAtt.mesh.visible = false;
-          nearestAtt.cooldown = 1000000;
+          this.player.equipAttachment(nearestAtt.attachment);
+          nearestAtt.taken = true;
+          this.removePickupMesh(nearestAtt.mesh);
         }
         this.player.consumeInteractHold();
         this.activePickupHoldTime = 0;
@@ -920,82 +899,90 @@ export class Game {
     }
 
     // Update Prompts
-    if (bestAction) {
-      const progress = this.activePickupHoldTime / ((bestAction === 'titan') ? this.TITAN_EMBARK_HOLD_TIME : this.PICKUP_HOLD_TIME);
-      const interactKey = keyCodeToLabel(getBindings().embark);
-      let label = '';
-      let color = '#00ffcc';
-
-      if (bestAction === 'titan') {
-        label = `Hold [${interactKey}] to EMBARK`;
-        color = '#ff6600';
-      } else if (bestAction === 'weapon' && nearestWeapon) {
-        label = `Hold [${interactKey}] to swap ${nearestWeapon.weapon.name}`;
-        color = '#' + nearestWeapon.weapon.bulletVisuals.color.toString(16).padStart(6, '0');
-      } else if (bestAction === 'attachment' && nearestAtt) {
-        label = `Hold [${interactKey}] to equip ${nearestAtt.attachment.name}`;
-      }
-
-      this.updateInteractionPrompt(label, color, progress);
-    } else {
-      if (this.pickupPromptEl) this.pickupPromptEl.style.display = 'none';
+    if (!bestAction) {
+      this.ui.hideInteractionPrompt();
+      return;
     }
+
+    const interactKey = keyCodeToLabel(getBindings().embark);
+    let label = '';
+    let color = '#00ffcc';
+    if (bestAction === 'titan') {
+      label = `Hold [${interactKey}] to EMBARK`;
+      color = '#ff6600';
+    } else if (bestAction === 'weapon' && nearestWeapon) {
+      const verb = this.player.hasFreeWeaponSlot() ? 'take' : 'swap for';
+      label = `Hold [${interactKey}] to ${verb} ${nearestWeapon.weapon.name}`;
+      color = '#' + nearestWeapon.weapon.bulletVisuals.color.toString(16).padStart(6, '0');
+    } else if (bestAction === 'attachment' && nearestAtt) {
+      label = `Hold [${interactKey}] to equip ${nearestAtt.attachment.name}`;
+    }
+    this.ui.showInteractionPrompt(label, color, this.activePickupHoldTime / requiredTime);
   }
 
-  private updateInteractionPrompt(label: string, color: string, progress: number) {
-    if (!this.pickupPromptEl) {
-      this.pickupPromptEl = document.createElement('div');
-      this.pickupPromptEl.style.cssText = 'position:fixed;bottom:180px;left:50%;transform:translateX(-50%);color:#fff;font:14px monospace;z-index:100;background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:4px;text-align:center;pointer-events:none;';
-      document.body.appendChild(this.pickupPromptEl);
+  private pickUpWeapon(pickup: WeaponPickup): void {
+    const result = this.player.tryPickupWeapon(pickup.weapon);
+    if (!result.pickedUp) return;
+
+    if (result.dropped) {
+      // Leave the swapped-out weapon where the new one was
+      pickup.weapon = result.dropped;
+      this.rebuildPickupMesh(pickup);
+      pickup.cooldown = 0.5;
+      pickup.mesh.visible = false;
+    } else {
+      this.removePickupMesh(pickup.mesh);
+      this.weaponPickups = this.weaponPickups.filter((p) => p !== pickup);
     }
-    this.pickupPromptEl.style.display = 'block';
-    const progressPct = Math.round(progress * 100);
-    const progressBar = `<div style="margin-top:6px;width:220px;height:6px;background:rgba(255,255,255,0.15);border-radius:999px;overflow:hidden;"><div style="width:${progressPct}%;height:100%;background:${color};"></div></div>`;
-    this.pickupPromptEl.innerHTML = `${label}${progressBar}`;
   }
 
   private updateObjectives(delta: number) {
+    const playerPos = this.player.group.position;
     switch (this.currentLevel!.type) {
       case LevelType.CAPTURE:
-        this.capturePoints.forEach(point => {
-          if (this.player.group.position.distanceTo(point.position) < 3) {
+        for (const point of this.capturePoints) {
+          if (playerPos.distanceTo(point.position) < CAPTURE_RADIUS) {
             point.captured = true;
             point.timer += delta;
-            if (point.timer >= 3) this.capturedTime += delta;
+            if (point.timer >= CAPTURE_LOCK_TIME) this.capturedTime += delta;
           } else {
             point.captured = false;
           }
-        });
+        }
         break;
 
       case LevelType.RACE:
-        const playerPos = this.player.group.position;
         for (let i = 0; i < this.checkpoints.length; i++) {
-          if (!this.checkpoints[i].completed &&
-              playerPos.distanceTo(this.checkpoints[i].position) < 4) {
-            this.checkpoints[i].completed = true;
-            this.checkpointProgress = i + 1;
+          const checkpoint = this.checkpoints[i];
+          if (!checkpoint.completed && playerPos.distanceTo(checkpoint.position) < CHECKPOINT_RADIUS) {
+            checkpoint.completed = true;
+            this.checkpointProgress = this.checkpoints.filter((c) => c.completed).length;
             this.addScore(200);
-            if (i === this.checkpoints.length - 1) this.stats.objectivesCompleted++;
           }
         }
         break;
 
-      case LevelType.SURVIVAL:
-        if (this.enemies.length < this.currentLevel!.enemyCount * 2 &&
-            Math.random() < delta * 0.01) {
-          this.spawnEnemy();
+      case LevelType.SURVIVAL: {
+        // Reinforcements arrive faster the longer you survive
+        const maxEnemies = this.currentLevel!.enemyCount * 2;
+        const spawnInterval = Math.max(3, 8 - this.stats.time / 10);
+        this.survivalSpawnTimer += delta;
+        if (this.survivalSpawnTimer >= spawnInterval) {
+          this.survivalSpawnTimer = 0;
+          if (this.enemies.length < maxEnemies) this.spawnEnemy();
         }
         break;
+      }
     }
   }
 
   private spawnEnemy() {
+    // Arena corners, inside the survival walls
     const spawnPoints = [
-      new THREE.Vector3(30, 0, -30),
-      new THREE.Vector3(-30, 0, -30),
-      new THREE.Vector3(30, 0, 30),
-      new THREE.Vector3(-30, 0, 30)
+      new THREE.Vector3(15, 0, -50),
+      new THREE.Vector3(-15, 0, -50),
+      new THREE.Vector3(15, 0, -5),
+      new THREE.Vector3(-15, 0, -5)
     ];
 
     const point = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
@@ -1010,52 +997,38 @@ export class Game {
     }));
   }
 
+  /** Opaque, raycastable level geometry (used for line-of-sight and bullet collision). */
   private getWorldMeshes(): THREE.Mesh[] {
-    return this.scene.children.filter((o) => {
+    return this.scene.children.filter((o): o is THREE.Mesh => {
       if (!(o instanceof THREE.Mesh)) return false;
+      if (o.userData.ignoreRaycast) return false;
       const mat = o.material;
-      if (Array.isArray(mat)) {
-        if (mat.some((m) => (m as THREE.Material).transparent)) return false;
-      } else if ((mat as THREE.Material).transparent) {
-        return false;
-      }
-      return true;
-    }) as THREE.Mesh[];
+      if (Array.isArray(mat)) return !mat.some((m) => m.transparent);
+      return !mat.transparent;
+    });
   }
 
   private updateEnemies(delta: number) {
     const playerPos = this.player.group.position;
-    const cameraPos = this.camera.position;
     const worldMeshes = this.getWorldMeshes();
+    const playerVel = this.player.getVelocity();
+    const hitbox = { center: playerPos.clone().add(new THREE.Vector3(0, 0.5, 0)), radius: PLAYER_HITBOX_RADIUS };
+    const piloting = this.isPiloting();
+    if (piloting && this.titan) {
+      // Enemies engage the titan itself, which is a much bigger target than a pilot
+      hitbox.center.copy(this.titan.group.position).add(new THREE.Vector3(0, 5, 0));
+      hitbox.radius = 3;
+    }
+    const aimPos = piloting ? hitbox.center : playerPos;
 
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const enemy = this.enemies[i];
 
       // AI update: state machine, movement, shooting
-      const playerVel = this.player.getVelocity();
-      enemy.update(delta, cameraPos, playerPos, worldMeshes, playerVel);
-
-      // Check enemy bullets hitting player
-      for (let j = enemy.bullets.length - 1; j >= 0; j--) {
-        const b = enemy.bullets[j];
-        const bPos = b.mesh.position;
-        const dx = bPos.x - playerPos.x;
-        const dy = bPos.y - (playerPos.y + 0.5); // player center
-        const dz = bPos.z - playerPos.z;
-        const distSq = dx * dx + dy * dy + dz * dz;
-        if (distSq < 0.5 * 0.5) {
-          this.player.takeDamage(8, bPos.clone());
-          // Dispose this bullet
-          this.scene.remove(b.mesh);
-          b.mesh.geometry.dispose();
-          (b.mesh.material as THREE.Material).dispose();
-          if (b.trail) {
-            this.scene.remove(b.trail);
-            b.trail.geometry.dispose();
-            (b.trail.material as THREE.Material).dispose();
-          }
-          enemy.bullets.splice(j, 1);
-        }
+      const hits = enemy.update(delta, aimPos, worldMeshes, hitbox, playerVel);
+      for (const source of hits) {
+        if (piloting && this.titan) this.titan.takeDamage(ENEMY_BULLET_DAMAGE);
+        else this.player.takeDamage(ENEMY_BULLET_DAMAGE, source);
       }
 
       // Check enemy death
@@ -1069,62 +1042,74 @@ export class Game {
   }
 
   addScore(amount: number) {
-    this.stats.score += amount * this.scoreMultiplier;
+    this.stats.score += Math.round(amount * this.scoreMultiplier);
     this.scoreMultiplier = Math.min(2, this.scoreMultiplier + 0.05);
   }
 
+  private countDestroyedTargets(): number {
+    return this.targets.filter((t) => t.destroyed).length;
+  }
+
   private checkLevelCompletion() {
-    if (!this.currentLevel) return;
+    const level = this.currentLevel;
+    if (!level || this.state !== GameState.PLAYING) return;
 
-    switch (this.currentLevel.type) {
+    if (this.player.health <= 0) {
+      this.failLevel();
+      return;
+    }
+
+    let complete = false;
+    switch (level.type) {
       case LevelType.TRAINING:
-        if (this.targets.filter(t => t.health <= 0).length >= this.currentLevel.targetCount) {
-          this.completeLevel();
-        }
+        complete = this.countDestroyedTargets() >= level.targetCount;
         break;
-
       case LevelType.CAPTURE:
-        if (this.capturedTime >= 30) {
-          this.stats.objectivesCompleted++;
-          this.completeLevel();
-        }
+        complete = this.capturedTime >= CAPTURE_WIN_TIME;
         break;
-
       case LevelType.RACE:
-        if (this.checkpointProgress >= this.checkpoints.length) {
-          this.stats.objectivesCompleted++;
-          this.completeLevel();
-        }
+        complete = this.checkpoints.length > 0 && this.checkpointProgress >= this.checkpoints.length;
         break;
-
       case LevelType.SURVIVAL:
-        if (this.stats.time >= (this.currentLevel.timeLimit || 0)) {
-          this.stats.objectivesCompleted++;
-          this.completeLevel();
-        }
+        complete = this.stats.time >= (level.timeLimit ?? 0);
         break;
     }
 
-    if (this.currentLevel.timeLimit && this.stats.time >= this.currentLevel.timeLimit) {
-      if (this.currentLevel.type !== LevelType.SURVIVAL) this.failLevel();
+    if (complete) {
+      if (level.type !== LevelType.TRAINING) this.stats.objectivesCompleted++;
+      else this.stats.objectivesCompleted = this.countDestroyedTargets();
+      this.completeLevel();
+      return;
     }
 
-    if (this.player.health <= 0) this.failLevel();
+    if (level.timeLimit && this.stats.time >= level.timeLimit) {
+      this.failLevel();
+    }
+  }
+
+  /** Stop gameplay input and release the mouse so menu buttons can be clicked. */
+  private suspendGameplay(): void {
+    this.player?.setInputEnabled(false);
+    this.ui.hideInteractionPrompt();
+    if (document.pointerLockElement) document.exitPointerLock();
   }
 
   private completeLevel() {
     this.state = GameState.LEVEL_COMPLETE;
+    this.suspendGameplay();
     const nextLevel = this.levels.find(l => l.id === this.currentLevel!.id + 1);
     this.ui.showLevelComplete(
       this.stats,
       () => nextLevel ? this.startGame(nextLevel.id) : this.showMainMenu(),
       () => this.startGame(this.currentLevel!.id),
-      () => this.showMainMenu()
+      () => this.showMainMenu(),
+      !!nextLevel
     );
   }
 
   private failLevel() {
     this.state = GameState.GAME_OVER;
+    this.suspendGameplay();
     this.ui.showGameOver(
       this.stats,
       () => this.startGame(this.currentLevel!.id),
@@ -1134,11 +1119,11 @@ export class Game {
 
   private updateHUD() {
     if (this.state !== GameState.PLAYING || !this.currentLevel) return;
-    const isPilotingTitan = !!this.titan &&
-      (this.titan.state === TitanState.PILOTING || this.titan.state === TitanState.ENTERING);
+    const isPilotingTitan = this.isPiloting();
     const titanDashMeter = this.titan ? this.titan.getDashMeter() : 100;
     const titanHealth = this.titan ? this.titan.getHealth() : 0;
     const titanShield = this.titan ? this.titan.getShield() : 0;
+    this.stats.health = this.player.health;
     this.ui.updateHUD({
       currentLevel: this.currentLevel,
       stats: this.stats,
@@ -1153,7 +1138,7 @@ export class Game {
       checkpoints: this.checkpoints,
       checkpointProgress: this.checkpointProgress,
       enemyCount: this.enemies.length,
-      destroyedTargets: this.targets.filter(t => t.health <= 0).length,
+      destroyedTargets: this.countDestroyedTargets(),
       showSniperScope: this.player.shouldShowSniperScope(),
       weapon: this.player.getWeaponHUDData(),
       debug: this.player.getDebugHUDData(),
@@ -1161,8 +1146,14 @@ export class Game {
   }
 
   togglePause() {
+    // Esc can arrive twice (keydown and the pointer-lock release it causes); treat that as one toggle
+    const now = performance.now();
+    if (now - this.lastPauseToggle < 250) return;
+    this.lastPauseToggle = now;
+
     if (this.state === GameState.PLAYING) {
       this.state = GameState.PAUSED;
+      this.suspendGameplay();
       document.body.style.cursor = 'auto';
       this.ui.showPause(
         () => this.togglePause(),
@@ -1172,13 +1163,22 @@ export class Game {
     } else if (this.state === GameState.PAUSED) {
       this.state = GameState.PLAYING;
       this.ui.hidePause();
+      this.player.setInputEnabled(true);
       this.player.lockPointer();
     }
   }
 
   showMainMenu() {
     this.state = GameState.MAIN_MENU;
+    this.suspendGameplay();
+    this.ui.hideMenus();
+    this.ui.showEmbarkIndicator(false);
     this.ui.showMainMenu(this.levels, (id) => this.startGame(id));
+  }
+
+  /** Restart the current level (keyboard shortcut). */
+  restartLevel(): void {
+    this.startGame(this.currentLevel?.id ?? 1);
   }
 
   onWindowResize() {
@@ -1188,8 +1188,9 @@ export class Game {
   }
 
   animate() {
+    // Always advance the clock so resuming from a menu doesn't produce one huge frame
+    const delta = Math.min(this.clock.getDelta(), 0.05);
     if (this.state === GameState.PLAYING) {
-      const delta = Math.min(this.clock.getDelta(), 0.05);
       this.update(delta);
     } else {
       this.ui.updateMenuNavigation(this.state);

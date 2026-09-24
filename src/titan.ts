@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+import { bevelBox } from './geometryUtils';
 import { BallisticsSystem, Bullet } from './ballistics';
 import { ImpactEffectsRenderer, TITAN_IMPACT_CONFIG } from './effects';
 import { TITAN_WEAPON } from './weapons';
@@ -126,6 +127,8 @@ export class Titan {
     this.buildArms();
     this.buildLegs();
     this.buildDetails();
+    this.buildArmorDetail();
+    this.applyPaintScheme();
     
     // Create physics body for collision
     this.createPhysicsBody();
@@ -195,7 +198,7 @@ export class Titan {
   
   private buildTorso(): void {
     // Main chest block
-    const chestGeo = new THREE.BoxGeometry(3, 2.5, 2);
+    const chestGeo = bevelBox(3, 2.5, 2);
     const armorMat = new THREE.MeshStandardMaterial({ 
       color: 0x4a5568,
       roughness: 0.3,
@@ -208,7 +211,7 @@ export class Titan {
     this.body.add(this.torso);
     
     // Chest armor plate
-    const chestPlateGeo = new THREE.BoxGeometry(2.2, 1.5, 0.3);
+    const chestPlateGeo = bevelBox(2.2, 1.5, 0.3);
     const chestPlateMat = new THREE.MeshStandardMaterial({ 
       color: 0x2d3748,
       roughness: 0.2,
@@ -219,7 +222,7 @@ export class Titan {
     this.torso.add(chestPlate);
     
     // Abdomen
-    const abdomenGeo = new THREE.BoxGeometry(2, 1.5, 1.5);
+    const abdomenGeo = bevelBox(2, 1.5, 1.5);
     const abdomen = new THREE.Mesh(abdomenGeo, armorMat);
     abdomen.position.y = -2;
     this.torso.add(abdomen);
@@ -243,13 +246,13 @@ export class Titan {
     this.torso.add(rightThruster);
     
     // Lower back vent
-    const ventGeo = new THREE.BoxGeometry(1.5, 0.8, 0.5);
+    const ventGeo = bevelBox(1.5, 0.8, 0.5);
     const vent = new THREE.Mesh(ventGeo, chestPlateMat);
     vent.position.set(0, -1.5, -0.9);
     this.torso.add(vent);
 
     // Pelvis / waist connector (bridges abdomen to legs)
-    const pelvisGeo = new THREE.BoxGeometry(2.2, 1.5, 1.6);
+    const pelvisGeo = bevelBox(2.2, 1.5, 1.6);
     const pelvis = new THREE.Mesh(pelvisGeo, armorMat);
     pelvis.position.y = -3.5;
     pelvis.castShadow = true;
@@ -270,7 +273,7 @@ export class Titan {
   private buildHead(): void {
     // No separate head — the cockpit is inside the torso.
     // Add a viewport visor slit on the upper chest instead.
-    const visorGeo = new THREE.BoxGeometry(1.8, 0.4, 0.15);
+    const visorGeo = bevelBox(1.8, 0.4, 0.15);
     const visorMat = new THREE.MeshStandardMaterial({
       color: 0x00ffff,
       emissive: 0x00ffff,
@@ -283,7 +286,7 @@ export class Titan {
     this.torso.add(this.head);
 
     // Visor housing / brow ridge
-    const browGeo = new THREE.BoxGeometry(2.0, 0.25, 0.4);
+    const browGeo = bevelBox(2.0, 0.25, 0.4);
     const darkArmorMat = new THREE.MeshStandardMaterial({
       color: 0x2d3748,
       roughness: 0.2,
@@ -349,21 +352,21 @@ export class Titan {
     this.leftArm.add(leftElbow);
     
     // Left forearm
-    const forearmGeo = new THREE.BoxGeometry(0.9, 1.6, 1);
+    const forearmGeo = bevelBox(0.9, 1.6, 1);
     this.leftForearm = new THREE.Mesh(forearmGeo, armorMat);
     this.leftForearm.position.y = -3.2;
     this.leftForearm.castShadow = true;
     this.leftArm.add(this.leftForearm);
     
     // Left fist
-    const fistGeo = new THREE.BoxGeometry(0.8, 0.9, 0.9);
+    const fistGeo = bevelBox(0.8, 0.9, 0.9);
     this.leftFist = new THREE.Mesh(fistGeo, darkArmorMat);
     this.leftFist.position.y = -4.4;
     this.leftFist.castShadow = true;
     this.leftArm.add(this.leftFist);
     
     // Left arm armor plates
-    const plateGeo = new THREE.BoxGeometry(1, 0.3, 1.2);
+    const plateGeo = bevelBox(1, 0.3, 1.2);
     const leftPlate = new THREE.Mesh(plateGeo, darkArmorMat);
     leftPlate.position.set(0, -1.2, 0.4);
     this.leftArm.add(leftPlate);
@@ -413,11 +416,11 @@ export class Titan {
 
     const armGun = new THREE.Group();
     // Main receiver
-    const gReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 1.8), gunMat);
+    const gReceiver = new THREE.Mesh(bevelBox(0.5, 0.4, 1.8), gunMat);
     gReceiver.castShadow = true;
     armGun.add(gReceiver);
     // Barrel shroud
-    const gShroud = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.6), gunDarkMat);
+    const gShroud = new THREE.Mesh(bevelBox(0.55, 0.3, 0.6), gunDarkMat);
     gShroud.position.set(0, 0.02, -1.0);
     gShroud.castShadow = true;
     armGun.add(gShroud);
@@ -433,7 +436,7 @@ export class Titan {
     gBarrelR.castShadow = true;
     armGun.add(gBarrelR);
     // Ammo feed
-    const gFeed = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.25, 0.5), gunAccentMat);
+    const gFeed = new THREE.Mesh(bevelBox(0.35, 0.25, 0.5), gunAccentMat);
     gFeed.position.set(0, -0.28, 0.2);
     gFeed.castShadow = true;
     armGun.add(gFeed);
@@ -479,21 +482,21 @@ export class Titan {
     this.leftLeg.add(leftKnee);
     
     // Left shin
-    const shinGeo = new THREE.BoxGeometry(1.2, 1.9, 1.4);
+    const shinGeo = bevelBox(1.2, 1.9, 1.4);
     this.leftLegLower = new THREE.Mesh(shinGeo, armorMat);
     this.leftLegLower.position.y = -3.6;
     this.leftLegLower.castShadow = true;
     this.leftLeg.add(this.leftLegLower);
     
     // Left foot
-    const footGeo = new THREE.BoxGeometry(1.4, 0.5, 2.2);
+    const footGeo = bevelBox(1.4, 0.5, 2.2);
     const leftFoot = new THREE.Mesh(footGeo, darkArmorMat);
     leftFoot.position.set(0, -4.7, 0.3);
     leftFoot.castShadow = true;
     this.leftLeg.add(leftFoot);
     
     // Left knee armor
-    const kneeArmorGeo = new THREE.BoxGeometry(0.8, 0.6, 0.8);
+    const kneeArmorGeo = bevelBox(0.8, 0.6, 0.8);
     const leftKneeArmor = new THREE.Mesh(kneeArmorGeo, darkArmorMat);
     leftKneeArmor.position.set(0, -2.5, 0.5);
     this.leftLeg.add(leftKneeArmor);
@@ -581,6 +584,136 @@ export class Titan {
     this.rightLeg.add(rightKneeLight);
   }
   
+  /**
+   * Armour plating, pistons and markings layered over the base skeleton. Parts
+   * are parented to whatever animates (thigh/shin meshes, arm groups, torso) so
+   * the landing crouch and walk animation carry them along.
+   */
+  private buildArmorDetail(): void {
+    const paint = new THREE.MeshStandardMaterial({ color: 0xa3adb8, metalness: 0.45, roughness: 0.48, name: 'titan-paint' });
+    const frame = new THREE.MeshStandardMaterial({ color: 0x323a45, metalness: 0.75, roughness: 0.32, name: 'titan-frame' });
+    const piston = new THREE.MeshStandardMaterial({ color: 0xc8ccd0, metalness: 1.0, roughness: 0.18 });
+    const stripe = new THREE.MeshStandardMaterial({ color: 0xff6a1a, emissive: 0xff4400, emissiveIntensity: 0.25, metalness: 0.3, roughness: 0.45 });
+    const glow = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x33ffee).multiplyScalar(2.5) });
+
+    const part = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): THREE.Mesh => {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, y, z);
+      mesh.rotation.set(rx, ry, rz);
+      mesh.castShadow = !(mat instanceof THREE.MeshBasicMaterial);
+      mesh.receiveShadow = true;
+      parent.add(mesh);
+      return mesh;
+    };
+    /** Hydraulic ram between two points in `parent`'s space. */
+    const ram = (parent: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3, radius: number) => {
+      const dir = b.clone().sub(a);
+      const len = dir.length();
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.5, radius * 1.5, len * 0.55, 12), frame);
+      sleeve.quaternion.copy(q);
+      sleeve.position.copy(a).addScaledVector(dir, 0.275);
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, len * 0.6, 12), piston);
+      rod.quaternion.copy(q);
+      rod.position.copy(a).addScaledVector(dir, 0.7);
+      for (const m of [sleeve, rod]) { m.castShadow = true; parent.add(m); }
+    };
+
+    // --- Torso ---
+    const t = this.torso;
+    for (const sx of [-1, 1]) {
+      // Angled upper chest plates framing the visor
+      part(t, bevelBox(1.35, 0.85, 0.3, 0.08, 0.12), paint, sx * 0.78, 0.2, 1.12, -0.18, sx * 0.18, 0);
+      // Side vents: stacked slats
+      for (let i = 0; i < 4; i++) part(t, bevelBox(0.12, 0.08, 1.1, 0.02), frame, sx * 1.55, -0.55 + i * 0.22, 0.1);
+      // Hip skirt plates
+      part(t, bevelBox(0.9, 0.9, 0.18, 0.05), paint, sx * 1.05, -3.3, 0.72, -0.12, 0, sx * 0.1);
+      // Antenna on the right side only
+      if (sx > 0) part(t, new THREE.CylinderGeometry(0.03, 0.03, 1.6, 6), frame, 1.35, 2.0, -0.6, 0, 0, -0.15);
+    }
+    // Collar / neck guard over the cockpit
+    part(t, bevelBox(2.4, 0.45, 1.3, 0.1, 0.15), frame, 0, 1.35, -0.1);
+    // Hazard stripe band and lower chest armour
+    part(t, bevelBox(2.3, 0.14, 0.08, 0.03), stripe, 0, -0.62, 1.18);
+    part(t, bevelBox(1.9, 0.6, 0.25, 0.06), paint, 0, -1.05, 1.0, 0.12);
+    // Visor frame bars
+    part(t, bevelBox(2.1, 0.08, 0.1, 0.02), frame, 0, 1.13, 1.16);
+    part(t, bevelBox(2.1, 0.08, 0.1, 0.02), frame, 0, 0.67, 1.16);
+    // Rear engine pack
+    part(t, bevelBox(2.3, 1.7, 0.8, 0.12, 0.15), frame, 0, 0.1, -1.35);
+    part(t, bevelBox(1.6, 0.14, 0.1, 0.03), glow, 0, 0.75, -1.77);
+
+    // --- Shoulders: big pauldrons with a unit marking ---
+    const decal = this.makeUnitDecal();
+    for (const [arm, sx] of [[this.leftArm, -1], [this.rightArm, 1]] as const) {
+      const pad = part(arm, bevelBox(1.7, 0.95, 1.9, 0.12, 0.15), paint, sx * 0.25, 0.45, 0, 0, 0, sx * -0.22);
+      part(pad, bevelBox(1.72, 0.12, 0.3, 0.03), stripe, 0, 0.1, 0.85);
+      const label = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.45), new THREE.MeshStandardMaterial({ map: decal, transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 }));
+      label.position.set(sx * 0.861, 0, 0);
+      label.rotation.y = sx * Math.PI / 2;
+      pad.add(label);
+      // Upper-arm ram and forearm armour
+      ram(arm, new THREE.Vector3(sx * 0.35, -0.6, -0.45), new THREE.Vector3(sx * 0.3, -2.6, -0.45), 0.08);
+      part(arm, bevelBox(1.05, 1.2, 0.3, 0.06), paint, 0, -3.2, 0.55);
+    }
+
+    // --- Legs ---
+    for (const [upper, lower, leg] of [[this.leftLegUpper, this.leftLegLower, this.leftLeg], [this.rightLegUpper, this.rightLegLower, this.rightLeg]] as const) {
+      // Thigh armour (moves with the thigh)
+      part(upper, bevelBox(1.05, 1.5, 0.35, 0.08), paint, 0, 0.05, 0.62, -0.06);
+      part(upper, bevelBox(1.07, 0.12, 0.37, 0.03), stripe, 0, 0.5, 0.63, -0.06);
+      // Shin armour and a ram behind the calf (moves with the shin)
+      part(lower, bevelBox(1.0, 1.6, 0.3, 0.08), paint, 0, 0.1, 0.78, 0.05);
+      ram(lower, new THREE.Vector3(0, 0.8, -0.75), new THREE.Vector3(0, -0.9, -0.8), 0.09);
+      part(lower, bevelBox(0.5, 0.08, 0.1, 0.02), glow, 0, -0.55, 0.95);
+      // Toe cap and heel spur
+      part(leg, bevelBox(1.3, 0.4, 0.7, 0.08), paint, 0, -4.78, 1.5, 0.15);
+      part(leg, bevelBox(0.7, 0.35, 0.6, 0.06), frame, 0, -4.8, -0.95);
+    }
+  }
+
+  /** Canvas decal for the shoulder pads. */
+  private makeUnitDecal(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, 256, 128);
+    ctx.fillStyle = 'rgba(20, 24, 30, 0.9)';
+    ctx.font = 'bold 64px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('BT-7', 128, 58);
+    ctx.fillRect(28, 100, 200, 8);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /**
+   * Swap the base build's near-black gunmetal for a two-tone paint scheme. Under
+   * sky lighting the old 0x4a5568 metal read as a dark silhouette with no form.
+   */
+  private applyPaintScheme(): void {
+    const remap = new Map<number, THREE.MeshStandardMaterial>([
+      [0x4a5568, new THREE.MeshStandardMaterial({ color: 0x8f9aa6, metalness: 0.5, roughness: 0.45 })],
+      [0x2d3748, new THREE.MeshStandardMaterial({ color: 0x3a434f, metalness: 0.7, roughness: 0.35 })],
+    ]);
+    const replaced = new Set<THREE.Material>();
+    this.body.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh || Array.isArray(mesh.material)) return;
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      if (!mat.isMeshStandardMaterial || mat.emissiveIntensity > 0 && mat.emissive.getHex() !== 0) return;
+      const replacement = remap.get(mat.color.getHex());
+      if (replacement) {
+        replaced.add(mat);
+        mesh.material = replacement;
+      }
+    });
+    for (const mat of replaced) mat.dispose();
+  }
+
   call(position: THREE.Vector3): void {
     if (this.state !== TitanState.INACTIVE && this.state !== TitanState.DESTROYED) {
       return;
@@ -1050,15 +1183,15 @@ export class Titan {
     const darkMat = new THREE.MeshStandardMaterial({ color: 0x232c38, roughness: 0.18, metalness: 0.82 });
     const accentMat = new THREE.MeshStandardMaterial({ color: 0xff8844, emissive: 0xff6622, emissiveIntensity: 0.4, roughness: 0.22, metalness: 0.55 });
 
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.26, 1.05), bodyMat);
+    const receiver = new THREE.Mesh(bevelBox(0.34, 0.26, 1.05), bodyMat);
     receiver.position.set(0, -0.03, -0.18);
     gun.add(receiver);
 
-    const housing = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.24, 0.42), darkMat);
+    const housing = new THREE.Mesh(bevelBox(0.42, 0.24, 0.42), darkMat);
     housing.position.set(0, -0.05, 0.28);
     gun.add(housing);
 
-    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.76), darkMat);
+    const spine = new THREE.Mesh(bevelBox(0.14, 0.08, 0.76), darkMat);
     spine.position.set(0, 0.11, -0.06);
     gun.add(spine);
 
@@ -1072,23 +1205,23 @@ export class Titan {
     barrelRight.position.set(-0.11, -0.01, -0.52);
     gun.add(barrelRight);
 
-    const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.18, 0.34), bodyMat);
+    const shroud = new THREE.Mesh(bevelBox(0.38, 0.18, 0.34), bodyMat);
     shroud.position.set(0, 0.01, -0.74);
     gun.add(shroud);
 
-    const feed = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.32), accentMat);
+    const feed = new THREE.Mesh(bevelBox(0.22, 0.16, 0.32), accentMat);
     feed.position.set(0, -0.18, 0.1);
     gun.add(feed);
 
-    const rearBlock = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, 0.24), darkMat);
+    const rearBlock = new THREE.Mesh(bevelBox(0.28, 0.22, 0.24), darkMat);
     rearBlock.position.set(0, -0.02, 0.62);
     gun.add(rearBlock);
 
-    const sightBase = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.18), accentMat);
+    const sightBase = new THREE.Mesh(bevelBox(0.08, 0.05, 0.18), accentMat);
     sightBase.position.set(0, 0.16, -0.18);
     gun.add(sightBase);
 
-    const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.08), accentMat);
+    const frontSight = new THREE.Mesh(bevelBox(0.05, 0.06, 0.08), accentMat);
     frontSight.position.set(0, 0.15, -0.78);
     gun.add(frontSight);
 

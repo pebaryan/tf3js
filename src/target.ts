@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+import { bevelBox } from './geometryUtils';
 
 export class Target {
   scene: THREE.Scene;
@@ -67,15 +68,15 @@ export class Target {
     base.position.set(0, -0.32, 0);
     this.mesh.add(base);
 
-    const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.32, 0.28), armorMat);
+    const pelvis = new THREE.Mesh(bevelBox(0.5, 0.32, 0.28), armorMat);
     pelvis.position.set(0, 0.72, 0);
     this.mesh.add(pelvis);
 
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.95, 0.38), armorMat);
+    const torso = new THREE.Mesh(bevelBox(0.78, 0.95, 0.38), armorMat);
     torso.position.set(0, 1.42, 0);
     this.mesh.add(torso);
 
-    const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.56, 0.08), accentMat);
+    const chestPlate = new THREE.Mesh(bevelBox(0.52, 0.56, 0.08), accentMat);
     chestPlate.position.set(0, 1.48, 0.2);
     this.mesh.add(chestPlate);
 
@@ -83,43 +84,43 @@ export class Target {
     head.position.set(0, 2.22, 0.02);
     this.mesh.add(head);
 
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.08, 0.08), accentMat);
+    const visor = new THREE.Mesh(bevelBox(0.2, 0.08, 0.08), accentMat);
     visor.position.set(0, 2.2, 0.2);
     this.mesh.add(visor);
 
-    const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.72, 0.16), undersuitMat);
+    const leftArm = new THREE.Mesh(bevelBox(0.16, 0.72, 0.16), undersuitMat);
     leftArm.position.set(-0.48, 1.45, 0);
     leftArm.rotation.z = 0.08;
     this.mesh.add(leftArm);
 
-    const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.72, 0.16), undersuitMat);
+    const rightArm = new THREE.Mesh(bevelBox(0.16, 0.72, 0.16), undersuitMat);
     rightArm.position.set(0.48, 1.45, 0);
     rightArm.rotation.z = -0.08;
     this.mesh.add(rightArm);
 
-    const leftForearm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.62, 0.14), armorMat);
+    const leftForearm = new THREE.Mesh(bevelBox(0.14, 0.62, 0.14), armorMat);
     leftForearm.position.set(-0.5, 0.95, 0.02);
     leftForearm.rotation.z = 0.04;
     this.mesh.add(leftForearm);
 
-    const rightForearm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.62, 0.14), armorMat);
+    const rightForearm = new THREE.Mesh(bevelBox(0.14, 0.62, 0.14), armorMat);
     rightForearm.position.set(0.5, 0.95, 0.02);
     rightForearm.rotation.z = -0.04;
     this.mesh.add(rightForearm);
 
-    const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.9, 0.2), undersuitMat);
+    const leftLeg = new THREE.Mesh(bevelBox(0.2, 0.9, 0.2), undersuitMat);
     leftLeg.position.set(-0.18, 0.27, 0);
     this.mesh.add(leftLeg);
 
-    const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.9, 0.2), undersuitMat);
+    const rightLeg = new THREE.Mesh(bevelBox(0.2, 0.9, 0.2), undersuitMat);
     rightLeg.position.set(0.18, 0.27, 0);
     this.mesh.add(rightLeg);
 
-    const leftShin = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.74, 0.16), armorMat);
+    const leftShin = new THREE.Mesh(bevelBox(0.18, 0.74, 0.16), armorMat);
     leftShin.position.set(-0.18, -0.02, 0.03);
     this.mesh.add(leftShin);
 
-    const rightShin = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.74, 0.16), armorMat);
+    const rightShin = new THREE.Mesh(bevelBox(0.18, 0.74, 0.16), armorMat);
     rightShin.position.set(0.18, -0.02, 0.03);
     this.mesh.add(rightShin);
 

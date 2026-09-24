@@ -3,6 +3,7 @@ import * as CANNON from 'cannon-es';
 import { BallisticsSystem, Bullet } from './ballistics';
 import { soundManager } from './sound';
 import { segmentIntersectsSphere } from './collision';
+import { bevelBox, mergeAndDispose } from './geometryUtils';
 
 /** Sphere approximating the player's body for enemy-bullet hit tests. */
 export interface PlayerHitbox {
@@ -103,9 +104,9 @@ export class Enemy {
   private readonly ENEMY_RADIUS = 0.4;
 
   // --- Animation ---
-  private headMesh: THREE.Mesh | null = null;
-  private leftLegMesh: THREE.Mesh | null = null;
-  private rightLegMesh: THREE.Mesh | null = null;
+  private headMesh: THREE.Object3D | null = null;
+  private leftLegMesh: THREE.Object3D | null = null;
+  private rightLegMesh: THREE.Object3D | null = null;
   private walkPhase = 0;
 
   constructor(
@@ -155,55 +156,121 @@ export class Enemy {
     this.state = this.aggressive ? EnemyState.PATROL : EnemyState.IDLE;
   }
 
+  /**
+   * Build the soldier model. Static parts are merged per material so each
+   * soldier costs about a dozen draw calls; legs and head stay separate
+   * because they animate.
+   */
   private buildHumanoidMesh(): void {
-    const bodyColor = 0xcc2222;
-    const darkColor = 0x881111;
-    const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor });
-    const darkMat = new THREE.MeshStandardMaterial({ color: darkColor });
+    const armorMat = new THREE.MeshStandardMaterial({ color: 0xb8322a, metalness: 0.35, roughness: 0.45 });
+    const suitMat = new THREE.MeshStandardMaterial({ color: 0x1d2129, metalness: 0.2, roughness: 0.75 });
+    const gunMat = new THREE.MeshStandardMaterial({ color: 0x2c3036, metalness: 0.8, roughness: 0.3 });
+    // HDR colour so the visor and jump-kit nozzles pick up bloom
+    const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff3a1a).multiplyScalar(3) });
 
-    // Torso
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.8, 0.25), bodyMat);
-    torso.position.y = 1.05;
-    torso.castShadow = true;
-    this.mesh.add(torso);
+    const parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
+    const add = (target: Map<THREE.Material, THREE.BufferGeometry[]>, mat: THREE.Material, geo: THREE.BufferGeometry, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) => {
+      geo.applyMatrix4(new THREE.Matrix4().compose(
+        new THREE.Vector3(x, y, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
+        new THREE.Vector3(1, 1, 1),
+      ));
+      const list = target.get(mat) ?? [];
+      list.push(geo);
+      target.set(mat, list);
+    };
+    /** Capsule limb segment running from `a` to `b`. */
+    const limb = (target: Map<THREE.Material, THREE.BufferGeometry[]>, mat: THREE.Material, a: THREE.Vector3, b: THREE.Vector3, radius: number) => {
+      const dir = b.clone().sub(a);
+      const length = dir.length();
+      const geo = new THREE.CapsuleGeometry(radius, Math.max(0.01, length - radius * 2), 3, 8);
+      geo.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize()));
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      geo.translate(mid.x, mid.y, mid.z);
+      const list = target.get(mat) ?? [];
+      list.push(geo);
+      target.set(mat, list);
+    };
+    const flush = (target: Map<THREE.Material, THREE.BufferGeometry[]>, parent: THREE.Object3D) => {
+      for (const [mat, geos] of target) {
+        const merged = mergeAndDispose(geos);
+        if (!merged) continue;
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.castShadow = !(mat instanceof THREE.MeshBasicMaterial);
+        mesh.receiveShadow = true;
+        parent.add(mesh);
+      }
+      target.clear();
+    };
+    const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
-    // Head
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 0.25), bodyMat);
-    head.position.y = 1.65;
-    head.castShadow = true;
+    // --- Torso ---
+    add(parts, suitMat, bevelBox(0.34, 0.17, 0.22), 0, 0.95, 0);                 // pelvis
+    add(parts, suitMat, bevelBox(0.3, 0.2, 0.2), 0, 1.1, 0);                     // abdomen
+    add(parts, armorMat, bevelBox(0.44, 0.34, 0.27, 0.05), 0, 1.33, 0);          // chest rig
+    add(parts, armorMat, bevelBox(0.3, 0.2, 0.05, 0.02), 0, 1.3, 0.145, -0.08);  // chest plate
+    add(parts, gunMat, bevelBox(0.36, 0.05, 0.24), 0, 1.03, 0);                  // belt
+    for (const sx of [-1, 1]) add(parts, suitMat, bevelBox(0.08, 0.1, 0.06), sx * 0.12, 1.02, 0.13); // pouches
+    add(parts, suitMat, new THREE.CylinderGeometry(0.055, 0.065, 0.1, 10), 0, 1.54, 0); // neck
+
+    // --- Jump kit ---
+    add(parts, gunMat, bevelBox(0.32, 0.38, 0.13, 0.03), 0, 1.3, -0.2);
+    for (const sx of [-1, 1]) {
+      add(parts, gunMat, new THREE.CylinderGeometry(0.045, 0.06, 0.16, 12), sx * 0.09, 1.08, -0.24);
+      add(parts, glowMat, new THREE.CylinderGeometry(0.035, 0.035, 0.02, 12), sx * 0.09, 0.995, -0.24);
+    }
+
+    // --- Shoulders ---
+    for (const sx of [-1, 1]) add(parts, armorMat, bevelBox(0.15, 0.1, 0.17, 0.04), sx * 0.27, 1.47, 0, 0, 0, sx * -0.25);
+
+    // --- Arms, holding the rifle at the ready ---
+    const rShoulder = v(0.25, 1.44, 0), rElbow = v(0.24, 1.2, 0.06), rHand = v(0.08, 1.13, 0.27);
+    const lShoulder = v(-0.25, 1.44, 0), lElbow = v(-0.24, 1.22, 0.16), lHand = v(0.0, 1.17, 0.5);
+    limb(parts, suitMat, rShoulder, rElbow, 0.055);
+    limb(parts, armorMat, rElbow, rHand, 0.05);
+    limb(parts, suitMat, lShoulder, lElbow, 0.055);
+    limb(parts, armorMat, lElbow, lHand, 0.05);
+    add(parts, suitMat, bevelBox(0.07, 0.08, 0.09), rHand.x, rHand.y, rHand.z);  // gloves
+    add(parts, suitMat, bevelBox(0.07, 0.08, 0.09), lHand.x, lHand.y, lHand.z);
+
+    // --- Rifle ---
+    add(parts, gunMat, bevelBox(0.06, 0.1, 0.42, 0.015), 0.05, 1.18, 0.36);      // receiver
+    add(parts, gunMat, new THREE.CylinderGeometry(0.014, 0.016, 0.28, 10), 0.05, 1.2, 0.7, Math.PI / 2); // barrel
+    add(parts, gunMat, bevelBox(0.04, 0.13, 0.07, 0.01), 0.05, 1.08, 0.4, -0.25); // magazine
+    add(parts, gunMat, bevelBox(0.045, 0.09, 0.18, 0.012), 0.05, 1.15, 0.08);    // stock
+    add(parts, gunMat, bevelBox(0.04, 0.045, 0.1, 0.01), 0.05, 1.255, 0.36);     // optic
+    add(parts, glowMat, bevelBox(0.062, 0.012, 0.16, 0.004), 0.05, 1.215, 0.42); // accent strip
+
+    flush(parts, this.mesh);
+
+    // --- Head (tracks the player) ---
+    const head = new THREE.Group();
+    head.position.set(0, 1.66, 0);
+    const helmet = new THREE.SphereGeometry(0.13, 16, 12);
+    helmet.scale(1, 1.05, 1.12);
+    add(parts, armorMat, helmet, 0, 0, 0);
+    add(parts, suitMat, bevelBox(0.2, 0.09, 0.12, 0.03), 0, -0.08, 0.05);          // jaw guard
+    add(parts, glowMat, bevelBox(0.19, 0.045, 0.05, 0.015), 0, 0.01, 0.125);       // visor
+    add(parts, gunMat, new THREE.CylinderGeometry(0.006, 0.006, 0.18, 6), 0.09, 0.13, -0.06, 0.2); // antenna
+    flush(parts, head);
     this.mesh.add(head);
     this.headMesh = head;
 
-    // Visor (dark slit)
-    const visor = new THREE.Mesh(
-      new THREE.BoxGeometry(0.2, 0.06, 0.02),
-      new THREE.MeshBasicMaterial({ color: 0x220000 }),
-    );
-    visor.position.set(0, 1.67, 0.13);
-    this.mesh.add(visor);
-
-    // Left leg
-    const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, 0.15), darkMat);
-    leftLeg.position.set(-0.1, 0.3, 0);
-    leftLeg.castShadow = true;
-    this.mesh.add(leftLeg);
-    this.leftLegMesh = leftLeg;
-
-    // Right leg
-    const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, 0.15), darkMat);
-    rightLeg.position.set(0.1, 0.3, 0);
-    rightLeg.castShadow = true;
-    this.mesh.add(rightLeg);
-    this.rightLegMesh = rightLeg;
-
-    // Weapon (small box extending forward from right hand)
-    const weapon = new THREE.Mesh(
-      new THREE.BoxGeometry(0.06, 0.06, 0.3),
-      new THREE.MeshStandardMaterial({ color: 0x444444 }),
-    );
-    weapon.position.set(0.25, 0.95, 0.2);
-    weapon.castShadow = true;
-    this.mesh.add(weapon);
+    // --- Legs, pivoting at the hip ---
+    const buildLeg = (side: number): THREE.Group => {
+      const leg = new THREE.Group();
+      leg.position.set(side * 0.11, 0.92, 0);
+      limb(parts, suitMat, v(0, -0.02, 0), v(0, -0.44, 0.02), 0.075);             // thigh
+      add(parts, armorMat, bevelBox(0.1, 0.12, 0.08, 0.025), 0, -0.44, 0.07);     // knee pad
+      limb(parts, suitMat, v(0, -0.46, 0.02), v(0, -0.84, -0.01), 0.062);         // shin
+      add(parts, armorMat, bevelBox(0.1, 0.22, 0.06, 0.02), 0, -0.64, 0.05);      // shin guard
+      add(parts, gunMat, bevelBox(0.12, 0.09, 0.25, 0.03), 0, -0.875, 0.04);      // boot
+      flush(parts, leg);
+      this.mesh.add(leg);
+      return leg;
+    };
+    this.leftLegMesh = buildLeg(-1);
+    this.rightLegMesh = buildLeg(1);
 
     // Flash overlays on torso and head
     const flashMat = new THREE.MeshBasicMaterial({
@@ -211,15 +278,15 @@ export class Enemy {
       transparent: true,
       opacity: 0,
       side: THREE.DoubleSide,
+      depthWrite: false,
     });
-    const torsoFlash = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.82, 0.27), flashMat);
-    torsoFlash.position.copy(torso.position);
+    const torsoFlash = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.66, 0.34), flashMat);
+    torsoFlash.position.set(0, 1.22, -0.02);
     this.mesh.add(torsoFlash);
     this.flashMeshes.push(torsoFlash);
 
-    const headFlash = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.27, 0.27), flashMat.clone());
-    headFlash.position.copy(head.position);
-    this.mesh.add(headFlash);
+    const headFlash = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10), flashMat.clone());
+    head.add(headFlash);
     this.flashMeshes.push(headFlash);
   }
 
@@ -290,8 +357,9 @@ export class Enemy {
   // --- Shooting ---
 
   private shootAt(playerPos: THREE.Vector3, playerVel?: THREE.Vector3): void {
-    const eyePos = this.mesh.position.clone();
-    eyePos.y += 1.0; // weapon height
+    // Fire from the rifle's muzzle
+    this.mesh.updateMatrixWorld();
+    const eyePos = this.mesh.localToWorld(new THREE.Vector3(0.05, 1.2, 0.86));
 
     // Aim lead: predict where player will be based on bullet travel time
     let aimTarget = playerPos.clone();

@@ -119,6 +119,8 @@ function makeMaterials() {
     paintDark: new THREE.MeshStandardMaterial({ color: 0x7d8792, metalness: 0.35, roughness: 0.5 }),
     frame: new THREE.MeshStandardMaterial({ color: 0x2b3139, metalness: 0.8, roughness: 0.36 }),
     dark: new THREE.MeshStandardMaterial({ color: 0x16191d, metalness: 0.6, roughness: 0.45 }),
+    // Open-ended bells are seen from inside too
+    nozzle: new THREE.MeshStandardMaterial({ color: 0x1c2025, metalness: 0.7, roughness: 0.4, side: THREE.DoubleSide }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xd4d8dc, metalness: 1.0, roughness: 0.16 }),
     accent: new THREE.MeshStandardMaterial({ color: 0xf36b1c, metalness: 0.25, roughness: 0.48 }),
     hazard: new THREE.MeshStandardMaterial({ map: makeHazardTexture(), metalness: 0.2, roughness: 0.6 }),
@@ -220,8 +222,11 @@ function buildTorso(m: TitanMaterials): { torso: THREE.Mesh; visor: THREE.Mesh }
   part(torso, bevelBox(2.2, 0.12, 0.08, 0.02), m.glow, 0, 1.05, -2.34);
   part(torso, new THREE.PlaneGeometry(1.9, 0.24), m.hazard, 0, -0.62, -2.31, 0, Math.PI, 0);
   for (const sx of [-1, 1]) {
-    const nozzle = part(torso, tube(0.42, 0.3, 0.9, 20, true), m.dark, sx * 0.75, -0.55, -2.35, 0.5);
-    part(nozzle, new THREE.CircleGeometry(0.3, 20), m.thruster, 0, 0, -0.35, Math.PI);
+    // Jump-jet bells under the engine pack, exhausting downward and slightly back
+    const mount = part(torso, bevelBox(0.8, 0.3, 0.8, 0.08), m.frame, sx * 0.75, -0.95, -1.95);
+    const nozzle = part(mount, new THREE.CylinderGeometry(0.26, 0.42, 0.8, 24, 1, true), m.nozzle, 0, -0.5, 0, 0.25);
+    // Glowing exhaust face inside the bell, facing the ground
+    part(nozzle, new THREE.CircleGeometry(0.34, 24), m.thruster, 0, -0.3, 0, Math.PI / 2);
   }
   // Antennae
   part(torso, new THREE.CylinderGeometry(0.035, 0.05, 1.8, 6), m.frame, 1.55, 2.3, -1.2, 0, 0, -0.12);

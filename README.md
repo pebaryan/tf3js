@@ -96,6 +96,7 @@ src/
 ├── player.ts        # Pilot controller: input, shooting, grapple, grenades, viewmodel
 ├── movement.ts      # Pilot movement physics (slide, wall-run, mantle, ...)
 ├── titan.ts         # Titan entity: drop-in, embark/exit, piloting, chaingun
+├── titanModel.ts    # Titan model, rig and leg IK
 ├── enemy.ts         # Enemy AI state machine and shooting
 ├── target.ts        # Training targets
 ├── weapons.ts       # Weapon/attachment definitions and WeaponManager

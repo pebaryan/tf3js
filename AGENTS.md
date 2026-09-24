@@ -27,7 +27,8 @@ src/
 ├── level.ts       # Map geometry builder (createLevel)
 ├── levels.ts      # Level data: LevelType enum, Level interface, LEVELS array
 ├── types.ts       # Shared types: GameState enum, GameStats, Damageable, HUD data
-├── titan.ts       # Titan entity logic
+├── titan.ts       # Titan entity logic (states, piloting, weapons)
+├── titanModel.ts  # Titan geometry, rig and two-bone leg IK
 ├── enemy.ts       # Enemy entity logic
 ├── target.ts      # Destructible target entities
 ├── weapons.ts     # Weapon definitions, cloneWeapon, WeaponManager

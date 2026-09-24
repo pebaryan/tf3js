@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { bevelBox } from './geometryUtils';
+import { disposeObject3D } from './collision';
+import { buildTitanModel, poseTitanLegs, TitanRig } from './titanModel';
 import { BallisticsSystem, Bullet } from './ballistics';
 import { ImpactEffectsRenderer, TITAN_IMPACT_CONFIG } from './effects';
 import { TITAN_WEAPON } from './weapons';
@@ -34,6 +36,7 @@ export class Titan {
   
   // Meshes
   group: THREE.Group;
+  private rig: TitanRig;
   body: THREE.Group;
   torso!: THREE.Mesh;
   head!: THREE.Mesh;
@@ -93,10 +96,8 @@ export class Titan {
   private isFiring = false;
   private lastFireTime = 0;
   private readonly FIRE_COOLDOWN = 0.15; // seconds
-  private readonly TITAN_MUZZLE_OFFSETS = [
-    new THREE.Vector3(0.22, -0.12, -0.72),
-    new THREE.Vector3(-0.22, -0.12, -0.72),
-  ];
+  /** Hand-held cannon muzzles in right-forearm space (set from the model rig). */
+  private TITAN_MUZZLE_OFFSETS: THREE.Vector3[] = [];
   private readonly COCKPIT_MUZZLE_OFFSETS = [
     new THREE.Vector3(0.11, -0.01, -1.02),
     new THREE.Vector3(-0.11, -0.01, -1.02),
@@ -122,13 +123,24 @@ export class Titan {
     this.body = new THREE.Group();
     this.group.add(this.body);
     
-    this.buildTorso();
-    this.buildHead();
-    this.buildArms();
-    this.buildLegs();
-    this.buildDetails();
-    this.buildArmorDetail();
-    this.applyPaintScheme();
+    this.rig = buildTitanModel(this.body, 8);
+    this.torso = this.rig.torso;
+    this.head = this.rig.visor;
+    this.leftArm = this.rig.leftArm;
+    this.rightArm = this.rig.rightArm;
+    this.leftShoulder = this.rig.leftShoulder;
+    this.rightShoulder = this.rig.rightShoulder;
+    this.leftForearm = this.rig.leftForearm;
+    this.rightForearm = this.rig.rightForearm;
+    this.leftFist = this.rig.leftFist;
+    this.rightFist = this.rig.rightFist;
+    this.leftLeg = this.rig.leftLeg.hip;
+    this.rightLeg = this.rig.rightLeg.hip;
+    this.leftLegUpper = this.rig.leftLeg.thigh;
+    this.leftLegLower = this.rig.leftLeg.shin;
+    this.rightLegUpper = this.rig.rightLeg.thigh;
+    this.rightLegLower = this.rig.rightLeg.shin;
+    this.TITAN_MUZZLE_OFFSETS = this.rig.muzzleOffsets;
     
     // Create physics body for collision
     this.createPhysicsBody();
@@ -196,524 +208,6 @@ export class Titan {
     return { blocked: false, normal: new THREE.Vector3(0, 0, 0) };
   }
   
-  private buildTorso(): void {
-    // Main chest block
-    const chestGeo = bevelBox(3, 2.5, 2);
-    const armorMat = new THREE.MeshStandardMaterial({ 
-      color: 0x4a5568,
-      roughness: 0.3,
-      metalness: 0.7
-    });
-    this.torso = new THREE.Mesh(chestGeo, armorMat);
-    this.torso.position.y = 8;
-    this.torso.castShadow = true;
-    this.torso.receiveShadow = true;
-    this.body.add(this.torso);
-    
-    // Chest armor plate
-    const chestPlateGeo = bevelBox(2.2, 1.5, 0.3);
-    const chestPlateMat = new THREE.MeshStandardMaterial({ 
-      color: 0x2d3748,
-      roughness: 0.2,
-      metalness: 0.8
-    });
-    const chestPlate = new THREE.Mesh(chestPlateGeo, chestPlateMat);
-    chestPlate.position.set(0, 0, 1.15);
-    this.torso.add(chestPlate);
-    
-    // Abdomen
-    const abdomenGeo = bevelBox(2, 1.5, 1.5);
-    const abdomen = new THREE.Mesh(abdomenGeo, armorMat);
-    abdomen.position.y = -2;
-    this.torso.add(abdomen);
-    
-    // Back thrusters
-    const thrusterGeo = new THREE.CylinderGeometry(0.3, 0.4, 1, 8);
-    const thrusterMat = new THREE.MeshStandardMaterial({ 
-      color: 0x1a202c,
-      emissive: 0xff6600,
-      emissiveIntensity: 0.5
-    });
-    
-    const leftThruster = new THREE.Mesh(thrusterGeo, thrusterMat);
-    leftThruster.position.set(-0.8, 0, -1.2);
-    leftThruster.rotation.x = Math.PI / 4;
-    this.torso.add(leftThruster);
-    
-    const rightThruster = new THREE.Mesh(thrusterGeo, thrusterMat);
-    rightThruster.position.set(0.8, 0, -1.2);
-    rightThruster.rotation.x = Math.PI / 4;
-    this.torso.add(rightThruster);
-    
-    // Lower back vent
-    const ventGeo = bevelBox(1.5, 0.8, 0.5);
-    const vent = new THREE.Mesh(ventGeo, chestPlateMat);
-    vent.position.set(0, -1.5, -0.9);
-    this.torso.add(vent);
-
-    // Pelvis / waist connector (bridges abdomen to legs)
-    const pelvisGeo = bevelBox(2.2, 1.5, 1.6);
-    const pelvis = new THREE.Mesh(pelvisGeo, armorMat);
-    pelvis.position.y = -3.5;
-    pelvis.castShadow = true;
-    this.torso.add(pelvis);
-
-    // Hip joint housings
-    const hipHousingGeo = new THREE.CylinderGeometry(0.6, 0.6, 0.5, 10);
-    const leftHipHousing = new THREE.Mesh(hipHousingGeo, chestPlateMat);
-    leftHipHousing.rotation.x = Math.PI / 2;
-    leftHipHousing.position.set(-1, -3.5, 0);
-    this.torso.add(leftHipHousing);
-    const rightHipHousing = new THREE.Mesh(hipHousingGeo, chestPlateMat);
-    rightHipHousing.rotation.x = Math.PI / 2;
-    rightHipHousing.position.set(1, -3.5, 0);
-    this.torso.add(rightHipHousing);
-  }
-  
-  private buildHead(): void {
-    // No separate head — the cockpit is inside the torso.
-    // Add a viewport visor slit on the upper chest instead.
-    const visorGeo = bevelBox(1.8, 0.4, 0.15);
-    const visorMat = new THREE.MeshStandardMaterial({
-      color: 0x00ffff,
-      emissive: 0x00ffff,
-      emissiveIntensity: 0.8,
-      transparent: true,
-      opacity: 0.85
-    });
-    this.head = new THREE.Mesh(visorGeo, visorMat);
-    this.head.position.set(0, 0.9, 1.08);
-    this.torso.add(this.head);
-
-    // Visor housing / brow ridge
-    const browGeo = bevelBox(2.0, 0.25, 0.4);
-    const darkArmorMat = new THREE.MeshStandardMaterial({
-      color: 0x2d3748,
-      roughness: 0.2,
-      metalness: 0.8
-    });
-    const brow = new THREE.Mesh(browGeo, darkArmorMat);
-    brow.position.set(0, 1.15, 1.0);
-    brow.castShadow = true;
-    this.torso.add(brow);
-
-    // Side sensor pods (flanking the visor)
-    const sensorGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.4, 8);
-    const sensorMat = new THREE.MeshStandardMaterial({
-      color: 0xff0000,
-      emissive: 0xff0000,
-      emissiveIntensity: 0.6
-    });
-    const leftSensor = new THREE.Mesh(sensorGeo, sensorMat);
-    leftSensor.rotation.z = Math.PI / 2;
-    leftSensor.position.set(-1.3, 0.9, 1.0);
-    this.torso.add(leftSensor);
-
-    const rightSensor = new THREE.Mesh(sensorGeo, sensorMat);
-    rightSensor.rotation.z = Math.PI / 2;
-    rightSensor.position.set(1.3, 0.9, 1.0);
-    this.torso.add(rightSensor);
-  }
-  
-  private buildArms(): void {
-    const armorMat = new THREE.MeshStandardMaterial({ 
-      color: 0x4a5568,
-      roughness: 0.3,
-      metalness: 0.7
-    });
-    const darkArmorMat = new THREE.MeshStandardMaterial({ 
-      color: 0x2d3748,
-      roughness: 0.2,
-      metalness: 0.8
-    });
-    
-    // Left arm
-    this.leftArm = new THREE.Group();
-    this.leftArm.position.set(-2, 0.8, 0);
-    this.torso.add(this.leftArm);
-    
-    // Left shoulder
-    const shoulderGeo = new THREE.SphereGeometry(0.9, 16, 12);
-    this.leftShoulder = new THREE.Mesh(shoulderGeo, armorMat);
-    this.leftShoulder.castShadow = true;
-    this.leftArm.add(this.leftShoulder);
-    
-    // Left upper arm
-    const upperArmGeo = new THREE.CylinderGeometry(0.5, 0.6, 1.8, 12);
-    const leftUpperArm = new THREE.Mesh(upperArmGeo, armorMat);
-    leftUpperArm.position.y = -1.2;
-    leftUpperArm.castShadow = true;
-    this.leftArm.add(leftUpperArm);
-    
-    // Left elbow joint
-    const elbowGeo = new THREE.SphereGeometry(0.45, 12, 8);
-    const leftElbow = new THREE.Mesh(elbowGeo, darkArmorMat);
-    leftElbow.position.y = -2.2;
-    this.leftArm.add(leftElbow);
-    
-    // Left forearm
-    const forearmGeo = bevelBox(0.9, 1.6, 1);
-    this.leftForearm = new THREE.Mesh(forearmGeo, armorMat);
-    this.leftForearm.position.y = -3.2;
-    this.leftForearm.castShadow = true;
-    this.leftArm.add(this.leftForearm);
-    
-    // Left fist
-    const fistGeo = bevelBox(0.8, 0.9, 0.9);
-    this.leftFist = new THREE.Mesh(fistGeo, darkArmorMat);
-    this.leftFist.position.y = -4.4;
-    this.leftFist.castShadow = true;
-    this.leftArm.add(this.leftFist);
-    
-    // Left arm armor plates
-    const plateGeo = bevelBox(1, 0.3, 1.2);
-    const leftPlate = new THREE.Mesh(plateGeo, darkArmorMat);
-    leftPlate.position.set(0, -1.2, 0.4);
-    this.leftArm.add(leftPlate);
-    
-    // Right arm
-    this.rightArm = new THREE.Group();
-    this.rightArm.position.set(2, 0.8, 0);
-    this.torso.add(this.rightArm);
-    
-    // Right shoulder
-    this.rightShoulder = new THREE.Mesh(shoulderGeo, armorMat);
-    this.rightShoulder.castShadow = true;
-    this.rightArm.add(this.rightShoulder);
-    
-    // Right upper arm
-    const rightUpperArm = new THREE.Mesh(upperArmGeo, armorMat);
-    rightUpperArm.position.y = -1.2;
-    rightUpperArm.castShadow = true;
-    this.rightArm.add(rightUpperArm);
-    
-    // Right elbow joint
-    const rightElbow = new THREE.Mesh(elbowGeo, darkArmorMat);
-    rightElbow.position.y = -2.2;
-    this.rightArm.add(rightElbow);
-    
-    // Right forearm
-    this.rightForearm = new THREE.Mesh(forearmGeo, armorMat);
-    this.rightForearm.position.y = -3.2;
-    this.rightForearm.castShadow = true;
-    this.rightArm.add(this.rightForearm);
-    
-    // Right fist
-    this.rightFist = new THREE.Mesh(fistGeo, darkArmorMat);
-    this.rightFist.position.y = -4.4;
-    this.rightFist.castShadow = true;
-    this.rightArm.add(this.rightFist);
-    
-    // Right arm armor plates
-    const rightPlate = new THREE.Mesh(plateGeo, darkArmorMat);
-    rightPlate.position.set(0, -1.2, 0.4);
-    this.rightArm.add(rightPlate);
-
-    // Arm-mounted weapon (XO-16 Chaingun) — visible on the 3rd-person model
-    const gunMat = new THREE.MeshStandardMaterial({ color: 0x495464, roughness: 0.28, metalness: 0.75 });
-    const gunDarkMat = new THREE.MeshStandardMaterial({ color: 0x232c38, roughness: 0.18, metalness: 0.82 });
-    const gunAccentMat = new THREE.MeshStandardMaterial({ color: 0xff8844, emissive: 0xff6622, emissiveIntensity: 0.4, roughness: 0.22, metalness: 0.55 });
-
-    const armGun = new THREE.Group();
-    // Main receiver
-    const gReceiver = new THREE.Mesh(bevelBox(0.5, 0.4, 1.8), gunMat);
-    gReceiver.castShadow = true;
-    armGun.add(gReceiver);
-    // Barrel shroud
-    const gShroud = new THREE.Mesh(bevelBox(0.55, 0.3, 0.6), gunDarkMat);
-    gShroud.position.set(0, 0.02, -1.0);
-    gShroud.castShadow = true;
-    armGun.add(gShroud);
-    // Twin barrels
-    const gBarrelL = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 1.6, 8), gunDarkMat);
-    gBarrelL.rotation.x = Math.PI / 2;
-    gBarrelL.position.set(0.15, 0, -1.1);
-    gBarrelL.castShadow = true;
-    armGun.add(gBarrelL);
-    const gBarrelR = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 1.6, 8), gunDarkMat);
-    gBarrelR.rotation.x = Math.PI / 2;
-    gBarrelR.position.set(-0.15, 0, -1.1);
-    gBarrelR.castShadow = true;
-    armGun.add(gBarrelR);
-    // Ammo feed
-    const gFeed = new THREE.Mesh(bevelBox(0.35, 0.25, 0.5), gunAccentMat);
-    gFeed.position.set(0, -0.28, 0.2);
-    gFeed.castShadow = true;
-    armGun.add(gFeed);
-
-    armGun.position.set(0, -4.4, -1.4);
-    armGun.rotation.x = -Math.PI / 2;
-    this.rightArm.add(armGun);
-  }
-  
-  private buildLegs(): void {
-    const armorMat = new THREE.MeshStandardMaterial({ 
-      color: 0x4a5568,
-      roughness: 0.3,
-      metalness: 0.7
-    });
-    const darkArmorMat = new THREE.MeshStandardMaterial({ 
-      color: 0x2d3748,
-      roughness: 0.2,
-      metalness: 0.8
-    });
-    
-    // Left leg
-    this.leftLeg = new THREE.Group();
-    this.leftLeg.position.set(-1, 5.0, 0);
-    this.body.add(this.leftLeg);
-    
-    // Left hip joint
-    const hipGeo = new THREE.SphereGeometry(0.7, 12, 8);
-    const leftHip = new THREE.Mesh(hipGeo, darkArmorMat);
-    this.leftLeg.add(leftHip);
-    
-    // Left thigh
-    const thighGeo = new THREE.CylinderGeometry(0.7, 0.6, 1.9, 12);
-    this.leftLegUpper = new THREE.Mesh(thighGeo, armorMat);
-    this.leftLegUpper.position.y = -1.3;
-    this.leftLegUpper.castShadow = true;
-    this.leftLeg.add(this.leftLegUpper);
-    
-    // Left knee
-    const kneeGeo = new THREE.SphereGeometry(0.55, 12, 8);
-    const leftKnee = new THREE.Mesh(kneeGeo, darkArmorMat);
-    leftKnee.position.y = -2.5;
-    this.leftLeg.add(leftKnee);
-    
-    // Left shin
-    const shinGeo = bevelBox(1.2, 1.9, 1.4);
-    this.leftLegLower = new THREE.Mesh(shinGeo, armorMat);
-    this.leftLegLower.position.y = -3.6;
-    this.leftLegLower.castShadow = true;
-    this.leftLeg.add(this.leftLegLower);
-    
-    // Left foot
-    const footGeo = bevelBox(1.4, 0.5, 2.2);
-    const leftFoot = new THREE.Mesh(footGeo, darkArmorMat);
-    leftFoot.position.set(0, -4.7, 0.3);
-    leftFoot.castShadow = true;
-    this.leftLeg.add(leftFoot);
-    
-    // Left knee armor
-    const kneeArmorGeo = bevelBox(0.8, 0.6, 0.8);
-    const leftKneeArmor = new THREE.Mesh(kneeArmorGeo, darkArmorMat);
-    leftKneeArmor.position.set(0, -2.5, 0.5);
-    this.leftLeg.add(leftKneeArmor);
-    
-    // Right leg
-    this.rightLeg = new THREE.Group();
-    this.rightLeg.position.set(1, 5.0, 0);
-    this.body.add(this.rightLeg);
-    
-    // Right hip joint
-    const rightHip = new THREE.Mesh(hipGeo, darkArmorMat);
-    this.rightLeg.add(rightHip);
-    
-    // Right thigh
-    this.rightLegUpper = new THREE.Mesh(thighGeo, armorMat);
-    this.rightLegUpper.position.y = -1.3;
-    this.rightLegUpper.castShadow = true;
-    this.rightLeg.add(this.rightLegUpper);
-    
-    // Right knee
-    const rightKnee = new THREE.Mesh(kneeGeo, darkArmorMat);
-    rightKnee.position.y = -2.5;
-    this.rightLeg.add(rightKnee);
-    
-    // Right shin
-    this.rightLegLower = new THREE.Mesh(shinGeo, armorMat);
-    this.rightLegLower.position.y = -3.6;
-    this.rightLegLower.castShadow = true;
-    this.rightLeg.add(this.rightLegLower);
-    
-    // Right foot
-    const rightFoot = new THREE.Mesh(footGeo, darkArmorMat);
-    rightFoot.position.set(0, -4.7, 0.3);
-    rightFoot.castShadow = true;
-    this.rightLeg.add(rightFoot);
-
-    // Right knee armor
-    const rightKneeArmor = new THREE.Mesh(kneeArmorGeo, darkArmorMat);
-    rightKneeArmor.position.set(0, -2.5, 0.5);
-    this.rightLeg.add(rightKneeArmor);
-  }
-  
-  private buildDetails(): void {
-    const glowMat = new THREE.MeshStandardMaterial({ 
-      color: 0x00ffff,
-      emissive: 0x00ffff,
-      emissiveIntensity: 0.6
-    });
-    
-    // Torso lights
-    const lightGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.1, 8);
-    
-    const leftChestLight = new THREE.Mesh(lightGeo, glowMat);
-    leftChestLight.rotation.z = Math.PI / 2;
-    leftChestLight.position.set(-0.8, 0.5, 1.35);
-    this.torso.add(leftChestLight);
-    
-    const rightChestLight = new THREE.Mesh(lightGeo, glowMat);
-    rightChestLight.rotation.z = Math.PI / 2;
-    rightChestLight.position.set(0.8, 0.5, 1.35);
-    this.torso.add(rightChestLight);
-    
-    // Shoulder lights
-    const shoulderLightGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.1, 8);
-    
-    const leftShoulderLight = new THREE.Mesh(shoulderLightGeo, glowMat);
-    leftShoulderLight.rotation.x = Math.PI / 2;
-    leftShoulderLight.position.set(0, 0.6, 0);
-    this.leftShoulder.add(leftShoulderLight);
-    
-    const rightShoulderLight = new THREE.Mesh(shoulderLightGeo, glowMat);
-    rightShoulderLight.rotation.x = Math.PI / 2;
-    rightShoulderLight.position.set(0, 0.6, 0);
-    this.rightShoulder.add(rightShoulderLight);
-    
-    // Knee lights
-    const kneeLightGeo = new THREE.SphereGeometry(0.12, 8, 6);
-    
-    const leftKneeLight = new THREE.Mesh(kneeLightGeo, glowMat);
-    leftKneeLight.position.set(0, -2.9, -0.3);
-    this.leftLeg.add(leftKneeLight);
-    
-    const rightKneeLight = new THREE.Mesh(kneeLightGeo, glowMat);
-    rightKneeLight.position.set(0, -2.9, -0.3);
-    this.rightLeg.add(rightKneeLight);
-  }
-  
-  /**
-   * Armour plating, pistons and markings layered over the base skeleton. Parts
-   * are parented to whatever animates (thigh/shin meshes, arm groups, torso) so
-   * the landing crouch and walk animation carry them along.
-   */
-  private buildArmorDetail(): void {
-    const paint = new THREE.MeshStandardMaterial({ color: 0xa3adb8, metalness: 0.45, roughness: 0.48, name: 'titan-paint' });
-    const frame = new THREE.MeshStandardMaterial({ color: 0x323a45, metalness: 0.75, roughness: 0.32, name: 'titan-frame' });
-    const piston = new THREE.MeshStandardMaterial({ color: 0xc8ccd0, metalness: 1.0, roughness: 0.18 });
-    const stripe = new THREE.MeshStandardMaterial({ color: 0xff6a1a, emissive: 0xff4400, emissiveIntensity: 0.25, metalness: 0.3, roughness: 0.45 });
-    const glow = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x33ffee).multiplyScalar(2.5) });
-
-    const part = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): THREE.Mesh => {
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(x, y, z);
-      mesh.rotation.set(rx, ry, rz);
-      mesh.castShadow = !(mat instanceof THREE.MeshBasicMaterial);
-      mesh.receiveShadow = true;
-      parent.add(mesh);
-      return mesh;
-    };
-    /** Hydraulic ram between two points in `parent`'s space. */
-    const ram = (parent: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3, radius: number) => {
-      const dir = b.clone().sub(a);
-      const len = dir.length();
-      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
-      const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.5, radius * 1.5, len * 0.55, 12), frame);
-      sleeve.quaternion.copy(q);
-      sleeve.position.copy(a).addScaledVector(dir, 0.275);
-      const rod = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, len * 0.6, 12), piston);
-      rod.quaternion.copy(q);
-      rod.position.copy(a).addScaledVector(dir, 0.7);
-      for (const m of [sleeve, rod]) { m.castShadow = true; parent.add(m); }
-    };
-
-    // --- Torso ---
-    const t = this.torso;
-    for (const sx of [-1, 1]) {
-      // Angled upper chest plates framing the visor
-      part(t, bevelBox(1.35, 0.85, 0.3, 0.08, 0.12), paint, sx * 0.78, 0.2, 1.12, -0.18, sx * 0.18, 0);
-      // Side vents: stacked slats
-      for (let i = 0; i < 4; i++) part(t, bevelBox(0.12, 0.08, 1.1, 0.02), frame, sx * 1.55, -0.55 + i * 0.22, 0.1);
-      // Hip skirt plates
-      part(t, bevelBox(0.9, 0.9, 0.18, 0.05), paint, sx * 1.05, -3.3, 0.72, -0.12, 0, sx * 0.1);
-      // Antenna on the right side only
-      if (sx > 0) part(t, new THREE.CylinderGeometry(0.03, 0.03, 1.6, 6), frame, 1.35, 2.0, -0.6, 0, 0, -0.15);
-    }
-    // Collar / neck guard over the cockpit
-    part(t, bevelBox(2.4, 0.45, 1.3, 0.1, 0.15), frame, 0, 1.35, -0.1);
-    // Hazard stripe band and lower chest armour
-    part(t, bevelBox(2.3, 0.14, 0.08, 0.03), stripe, 0, -0.62, 1.18);
-    part(t, bevelBox(1.9, 0.6, 0.25, 0.06), paint, 0, -1.05, 1.0, 0.12);
-    // Visor frame bars
-    part(t, bevelBox(2.1, 0.08, 0.1, 0.02), frame, 0, 1.13, 1.16);
-    part(t, bevelBox(2.1, 0.08, 0.1, 0.02), frame, 0, 0.67, 1.16);
-    // Rear engine pack
-    part(t, bevelBox(2.3, 1.7, 0.8, 0.12, 0.15), frame, 0, 0.1, -1.35);
-    part(t, bevelBox(1.6, 0.14, 0.1, 0.03), glow, 0, 0.75, -1.77);
-
-    // --- Shoulders: big pauldrons with a unit marking ---
-    const decal = this.makeUnitDecal();
-    for (const [arm, sx] of [[this.leftArm, -1], [this.rightArm, 1]] as const) {
-      const pad = part(arm, bevelBox(1.7, 0.95, 1.9, 0.12, 0.15), paint, sx * 0.25, 0.45, 0, 0, 0, sx * -0.22);
-      part(pad, bevelBox(1.72, 0.12, 0.3, 0.03), stripe, 0, 0.1, 0.85);
-      const label = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.45), new THREE.MeshStandardMaterial({ map: decal, transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 }));
-      label.position.set(sx * 0.861, 0, 0);
-      label.rotation.y = sx * Math.PI / 2;
-      pad.add(label);
-      // Upper-arm ram and forearm armour
-      ram(arm, new THREE.Vector3(sx * 0.35, -0.6, -0.45), new THREE.Vector3(sx * 0.3, -2.6, -0.45), 0.08);
-      part(arm, bevelBox(1.05, 1.2, 0.3, 0.06), paint, 0, -3.2, 0.55);
-    }
-
-    // --- Legs ---
-    for (const [upper, lower, leg] of [[this.leftLegUpper, this.leftLegLower, this.leftLeg], [this.rightLegUpper, this.rightLegLower, this.rightLeg]] as const) {
-      // Thigh armour (moves with the thigh)
-      part(upper, bevelBox(1.05, 1.5, 0.35, 0.08), paint, 0, 0.05, 0.62, -0.06);
-      part(upper, bevelBox(1.07, 0.12, 0.37, 0.03), stripe, 0, 0.5, 0.63, -0.06);
-      // Shin armour and a ram behind the calf (moves with the shin)
-      part(lower, bevelBox(1.0, 1.6, 0.3, 0.08), paint, 0, 0.1, 0.78, 0.05);
-      ram(lower, new THREE.Vector3(0, 0.8, -0.75), new THREE.Vector3(0, -0.9, -0.8), 0.09);
-      part(lower, bevelBox(0.5, 0.08, 0.1, 0.02), glow, 0, -0.55, 0.95);
-      // Toe cap and heel spur
-      part(leg, bevelBox(1.3, 0.4, 0.7, 0.08), paint, 0, -4.78, 1.5, 0.15);
-      part(leg, bevelBox(0.7, 0.35, 0.6, 0.06), frame, 0, -4.8, -0.95);
-    }
-  }
-
-  /** Canvas decal for the shoulder pads. */
-  private makeUnitDecal(): THREE.CanvasTexture {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, 256, 128);
-    ctx.fillStyle = 'rgba(20, 24, 30, 0.9)';
-    ctx.font = 'bold 64px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('BT-7', 128, 58);
-    ctx.fillRect(28, 100, 200, 8);
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
-  }
-
-  /**
-   * Swap the base build's near-black gunmetal for a two-tone paint scheme. Under
-   * sky lighting the old 0x4a5568 metal read as a dark silhouette with no form.
-   */
-  private applyPaintScheme(): void {
-    const remap = new Map<number, THREE.MeshStandardMaterial>([
-      [0x4a5568, new THREE.MeshStandardMaterial({ color: 0x8f9aa6, metalness: 0.5, roughness: 0.45 })],
-      [0x2d3748, new THREE.MeshStandardMaterial({ color: 0x3a434f, metalness: 0.7, roughness: 0.35 })],
-    ]);
-    const replaced = new Set<THREE.Material>();
-    this.body.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      if (!mesh.isMesh || Array.isArray(mesh.material)) return;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      if (!mat.isMeshStandardMaterial || mat.emissiveIntensity > 0 && mat.emissive.getHex() !== 0) return;
-      const replacement = remap.get(mat.color.getHex());
-      if (replacement) {
-        replaced.add(mat);
-        mesh.material = replacement;
-      }
-    });
-    for (const mat of replaced) mat.dispose();
-  }
-
   call(position: THREE.Vector3): void {
     if (this.state !== TitanState.INACTIVE && this.state !== TitanState.DESTROYED) {
       return;
@@ -783,6 +277,9 @@ export class Titan {
     this.updateSmokeParticles(delta);
     this.impactRenderer.update(delta);
     this.updateDashMeter(delta);
+
+    // Keep the feet planted whatever the body height (landing, piloting crouch, walk bob)
+    if (this.group.visible) poseTitanLegs(this.rig, this.body.position.y);
   }
 
   private updateDashMeter(delta: number): void {
@@ -931,9 +428,7 @@ export class Titan {
   }
 
   
-  private readonly LANDING_CROUCH = 3.5;
-
-  private readonly LEG_BASE_Y = 5.0;
+  private readonly LANDING_CROUCH = 2.3;
 
   private updateLanding(delta: number): void {
     this.landingAnimation += delta * 1.2;
@@ -958,36 +453,21 @@ export class Titan {
   }
 
   private applyCrouchPose(amount: number): void {
-    // Lower torso but keep legs planted on ground
+    // Lower the body; leg IK (see update) keeps the feet planted
     this.body.position.y = -amount;
-    this.leftLeg.position.y = this.LEG_BASE_Y + amount;
-    this.rightLeg.position.y = this.LEG_BASE_Y + amount;
+    poseTitanLegs(this.rig, this.body.position.y);
 
-    // Bend knees
-    const kneeAngle = amount * 0.15;
-    this.leftLegUpper.rotation.x = -kneeAngle;
-    this.leftLegLower.rotation.x = kneeAngle * 2;
-    this.rightLegUpper.rotation.x = -kneeAngle;
-    this.rightLegLower.rotation.x = kneeAngle * 2;
-
-    // Torso leans forward
-    this.torso.rotation.x = amount * 0.04;
-
-    // Arms spread outward and forward (avoid clipping into body)
-    this.leftArm.rotation.z = 0.3 + amount * 0.18;
-    this.rightArm.rotation.z = -0.3 - amount * 0.18;
-    this.leftArm.rotation.x = amount * 0.12;
-    this.rightArm.rotation.x = amount * 0.12;
+    // Torso pitches forward, fists reach down towards the ground
+    this.torso.rotation.x = amount * 0.06;
+    this.leftArm.rotation.z = 0.12 + amount * 0.06;
+    this.rightArm.rotation.z = -0.12 - amount * 0.04;
+    this.leftArm.rotation.x = -amount * 0.16;
+    this.rightArm.rotation.x = -amount * 0.1;
   }
 
   private resetStandingPose(): void {
     this.body.position.y = 0;
-    this.leftLeg.position.y = this.LEG_BASE_Y;
-    this.rightLeg.position.y = this.LEG_BASE_Y;
-    this.leftLegUpper.rotation.x = 0;
-    this.leftLegLower.rotation.x = 0;
-    this.rightLegUpper.rotation.x = 0;
-    this.rightLegLower.rotation.x = 0;
+    poseTitanLegs(this.rig, 0);
     this.torso.rotation.x = 0;
     this.leftArm.rotation.z = 0.1;
     this.rightArm.rotation.z = -0.1;
@@ -1577,16 +1057,7 @@ export class Titan {
       this.cockpitWeapon = null;
     }
 
-    this.group.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        if (Array.isArray(child.material)) {
-          child.material.forEach(m => m.dispose());
-        } else {
-          child.material.dispose();
-        }
-      }
-    });
+    disposeObject3D(this.group);
     
     this.scene.remove(this.group);
     

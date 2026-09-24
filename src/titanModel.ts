@@ -31,6 +31,8 @@ export interface TitanRig {
   visor: THREE.Mesh;
   leftArm: THREE.Group;
   rightArm: THREE.Group;
+  leftElbow: THREE.Group;
+  rightElbow: THREE.Group;
   leftShoulder: THREE.Mesh;
   rightShoulder: THREE.Mesh;
   leftForearm: THREE.Mesh;
@@ -66,6 +68,23 @@ export function poseTitanLegs(rig: TitanRig, bodyOffsetY: number): void {
     leg.shin.rotation.x = knee;
     leg.foot.rotation.x = ankle;
   }
+}
+
+/**
+ * Weapon-holding arm pose. The right upper arm swings slightly forward and the
+ * elbow bends so the forearm (and the cannon along it) points straight ahead at
+ * hip height; the left arm is raised in a bent guard. `crouch` (0..1) blends in
+ * the landing pose while keeping the cannon roughly level.
+ */
+export function poseTitanArms(rig: TitanRig, crouch: number): void {
+  const c = THREE.MathUtils.clamp(crouch, 0, 1);
+  // Right: upper arm + elbow ≈ -π/2 keeps the forearm level; crouching tips the muzzle down a little
+  // (the torso pitches forward when crouching, so the arms barely dip themselves)
+  rig.rightArm.rotation.set(-0.3 - c * 0.05, 0, -0.08 - c * 0.08);
+  rig.rightElbow.rotation.set(-1.3 + c * 0.05, 0, 0);
+  // Left: bent guard, forearm angled in across the body
+  rig.leftArm.rotation.set(-0.45 + c * 0.05, 0.25, 0.1 + c * 0.1);
+  rig.leftElbow.rotation.set(-1.15 + c * 0.1, 0, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -236,7 +255,7 @@ function buildTorso(m: TitanMaterials): { torso: THREE.Mesh; visor: THREE.Mesh }
 }
 
 function buildArm(m: TitanMaterials, side: -1 | 1): {
-  arm: THREE.Group; shoulder: THREE.Mesh; forearm: THREE.Mesh; fist: THREE.Mesh;
+  arm: THREE.Group; elbow: THREE.Group; shoulder: THREE.Mesh; forearm: THREE.Mesh; fist: THREE.Mesh;
 } {
   const arm = new THREE.Group();
 
@@ -251,21 +270,24 @@ function buildArm(m: TitanMaterials, side: -1 | 1): {
   part(arm, bevelBox(0.3, 1.3, 1.0, 0.08), m.paintDark, side * 0.5, -1.2, 0);
   ram(arm, m, new THREE.Vector3(0, -0.6, 0.55), new THREE.Vector3(0, -2.3, 0.6), 0.08);
 
-  // Elbow
-  part(arm, axle(0.46, 1.05), m.frame, 0, -2.2, 0);
+  // Elbow joint: forearm, hand (and the cannon) hang off this pivot so the arm can bend
+  const elbow = new THREE.Group();
+  elbow.position.set(0, -2.2, 0);
+  arm.add(elbow);
+  part(elbow, axle(0.46, 1.05), m.frame, 0, 0, 0);
 
   // Heavy forearm with top ridge
-  const forearm = part(arm, bevelBox(1.25, 2.0, 1.4, 0.2, 0.2), m.paint, 0, -3.25, 0.05);
+  const forearm = part(elbow, bevelBox(1.25, 2.0, 1.4, 0.2, 0.2), m.paint, 0, -1.05, 0.05);
   part(forearm, bevelBox(0.5, 1.7, 0.25, 0.08), m.paintDark, side * 0.62, 0, 0);
   part(forearm, bevelBox(0.9, 0.12, 1.42, 0.03), m.accent, 0, 0.55, 0);
   part(forearm, bevelBox(1.0, 0.3, 1.2, 0.08), m.frame, 0, -1.08, 0);
 
   // Hand: palm block with a knuckle row and thumb
-  const fist = part(arm, bevelBox(0.95, 0.85, 1.05, 0.14), m.frame, 0, -4.6, 0.05);
+  const fist = part(elbow, bevelBox(0.95, 0.85, 1.05, 0.14), m.frame, 0, -2.4, 0.05);
   part(fist, bevelBox(0.97, 0.32, 0.4, 0.08), m.dark, 0, -0.32, 0.38);
   part(fist, bevelBox(0.26, 0.5, 0.3, 0.08), m.dark, -side * 0.5, -0.05, 0.3);
 
-  return { arm, shoulder, forearm, fist };
+  return { arm, elbow, shoulder, forearm, fist };
 }
 
 /** XO-16 rotary cannon held in the right hand, barrels pointing +z. */
@@ -352,9 +374,12 @@ export function buildTitanModel(body: THREE.Group, torsoHeight: number): TitanRi
   right.arm.position.set(2.55, 0.75, -0.1);
   torso.add(left.arm, right.arm);
 
+  // Cannon lies along the forearm (elbow -Y), carry handle on top (elbow +Z),
+  // slung under the forearm with the fist wrapped over the receiver
   const { cannon, muzzles } = buildCannon(m);
-  cannon.position.set(0, -4.45, 0.1);
-  right.arm.add(cannon);
+  cannon.rotation.x = Math.PI / 2;
+  cannon.position.set(0.1, -1.6, -0.95);
+  right.elbow.add(cannon);
 
   const leftLeg = buildLeg(m, -1);
   const rightLeg = buildLeg(m, 1);
@@ -362,14 +387,20 @@ export function buildTitanModel(body: THREE.Group, torsoHeight: number): TitanRi
   rightLeg.hip.position.set(1.25, TITAN_HIP_HEIGHT, -0.05);
   body.add(leftLeg.hip, rightLeg.hip);
 
-  // Muzzles expressed in forearm space (fire origin when not in first person)
-  const muzzleOffsets = muzzles.map((p) => p.clone().add(cannon.position).sub(right.forearm.position));
+  // Muzzles expressed in forearm space (fire origin when not in first person).
+  // Cannon and forearm share the elbow as parent, so this is pose-independent.
+  cannon.updateMatrix();
+  right.forearm.updateMatrix();
+  const forearmInverse = right.forearm.matrix.clone().invert();
+  const muzzleOffsets = muzzles.map((p) => p.clone().applyMatrix4(cannon.matrix).applyMatrix4(forearmInverse));
 
   const rig: TitanRig = {
     torso,
     visor,
     leftArm: left.arm,
     rightArm: right.arm,
+    leftElbow: left.elbow,
+    rightElbow: right.elbow,
     leftShoulder: left.shoulder,
     rightShoulder: right.shoulder,
     leftForearm: left.forearm,
@@ -381,5 +412,6 @@ export function buildTitanModel(body: THREE.Group, torsoHeight: number): TitanRi
     muzzleOffsets,
   };
   poseTitanLegs(rig, 0);
+  poseTitanArms(rig, 0);
   return rig;
 }

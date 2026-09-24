@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { bevelBox } from './geometryUtils';
 import { disposeObject3D } from './collision';
-import { buildTitanModel, poseTitanLegs, TitanRig } from './titanModel';
+import { buildTitanModel, poseTitanArms, poseTitanLegs, TitanRig } from './titanModel';
 import { BallisticsSystem, Bullet } from './ballistics';
 import { ImpactEffectsRenderer, TITAN_IMPACT_CONFIG } from './effects';
 import { TITAN_WEAPON } from './weapons';
@@ -220,8 +220,7 @@ export class Titan {
     
     // Reset body parts to default positions
     this.body.rotation.set(0, 0, 0);
-    this.leftArm.rotation.set(0, 0, 0.2);
-    this.rightArm.rotation.set(0, 0, -0.2);
+    poseTitanArms(this.rig, 0);
     this.leftLeg.rotation.set(0, 0, 0);
     this.rightLeg.rotation.set(0, 0, 0);
     
@@ -457,22 +456,16 @@ export class Titan {
     this.body.position.y = -amount;
     poseTitanLegs(this.rig, this.body.position.y);
 
-    // Torso pitches forward, fists reach down towards the ground
+    // Torso pitches forward, arms keep holding the cannon but dip with the crouch
     this.torso.rotation.x = amount * 0.06;
-    this.leftArm.rotation.z = 0.12 + amount * 0.06;
-    this.rightArm.rotation.z = -0.12 - amount * 0.04;
-    this.leftArm.rotation.x = -amount * 0.16;
-    this.rightArm.rotation.x = -amount * 0.1;
+    poseTitanArms(this.rig, amount / this.LANDING_CROUCH);
   }
 
   private resetStandingPose(): void {
     this.body.position.y = 0;
     poseTitanLegs(this.rig, 0);
     this.torso.rotation.x = 0;
-    this.leftArm.rotation.z = 0.1;
-    this.rightArm.rotation.z = -0.1;
-    this.leftArm.rotation.x = 0;
-    this.rightArm.rotation.x = 0;
+    poseTitanArms(this.rig, 0);
   }
   
   private enteringTimer = 0;
@@ -653,8 +646,7 @@ export class Titan {
     }
 
     const crouchBlend = Math.min(1, Math.abs(this.body.position.y) / 2.8);
-    this.leftArm.rotation.z = 0.1 + crouchBlend * 0.12;
-    this.rightArm.rotation.z = -0.1 - crouchBlend * 0.12;
+    poseTitanArms(this.rig, crouchBlend * 0.6);
   }
 
   private createCockpitWeaponMesh(): THREE.Group {

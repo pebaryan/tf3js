@@ -96,7 +96,7 @@ export class Titan {
   private isFiring = false;
   private lastFireTime = 0;
   private readonly FIRE_COOLDOWN = 0.15; // seconds
-  /** Hand-held cannon muzzles in right-forearm space (set from the model rig). */
+  /** Hand-held cannon muzzles in weapon space (set from the model rig). */
   private TITAN_MUZZLE_OFFSETS: THREE.Vector3[] = [];
   private readonly COCKPIT_MUZZLE_OFFSETS = [
     new THREE.Vector3(0.11, -0.01, -1.02),
@@ -798,7 +798,7 @@ export class Titan {
     }
     this.group.updateWorldMatrix(true, false);
     const localOffset = this.TITAN_MUZZLE_OFFSETS[barrelIndex % this.TITAN_MUZZLE_OFFSETS.length];
-    return this.rightForearm.localToWorld(localOffset.clone());
+    return this.rig.weapon.localToWorld(localOffset.clone());
   }
 
   private getTitanProjectileVelocity(

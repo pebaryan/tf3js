@@ -16,8 +16,15 @@ import { bevelBox } from './geometryUtils';
 export const TITAN_HIP_HEIGHT = 5.0;
 /** Ankle joint height above the ground (half the foot's height). */
 export const TITAN_ANKLE_HEIGHT = 0.35;
-export const TITAN_THIGH_LENGTH = 2.4;
-export const TITAN_SHIN_LENGTH = 2.3;
+/*
+ * Thigh + shin (5.15) are deliberately longer than the standing hip-to-ankle
+ * distance (4.65), so IK leaves the knees bent ~25° even at rest: a planted,
+ * ready stance instead of locked-straight legs.
+ */
+export const TITAN_THIGH_LENGTH = 2.65;
+export const TITAN_SHIN_LENGTH = 2.5;
+/** Right shoulder pivot in torso space (the left one is mirrored in X). */
+export const TITAN_SHOULDER = new THREE.Vector3(2.55, 0.75, -0.1);
 
 export interface TitanLegRig {
   hip: THREE.Group;
@@ -41,7 +48,10 @@ export interface TitanRig {
   rightFist: THREE.Mesh;
   leftLeg: TitanLegRig;
   rightLeg: TitanLegRig;
-  /** Muzzle points of the hand-held cannon, in `rightForearm` space. */
+  /** The held weapon (child of the torso) and how it is gripped. */
+  weapon: THREE.Group;
+  weaponMount: TitanWeaponMount;
+  /** Muzzle points in `weapon` space. */
   muzzleOffsets: THREE.Vector3[];
 }
 
@@ -70,21 +80,117 @@ export function poseTitanLegs(rig: TitanRig, bodyOffsetY: number): void {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  Weapon mounts and arm IK                                           */
+/* ------------------------------------------------------------------ */
+
 /**
- * Weapon-holding arm pose. The right upper arm swings slightly forward and the
- * elbow bends so the forearm (and the cannon along it) points straight ahead at
- * hip height; the left arm is raised in a bent guard. `crouch` (0..1) blends in
- * the landing pose while keeping the cannon roughly level.
+ * How a Titan weapon is held.
+ * - `below`: the weapon hangs under the main hand, which grips a handle on top.
+ * - `above`: the weapon rides on top of the main hand, which grips a pistol grip underneath.
+ * In both cases the other hand holds a handle on the weapon's left side.
+ */
+export type TitanGripStyle = 'below' | 'above';
+
+export interface TitanWeaponMount {
+  style: TitanGripStyle;
+  /** Weapon origin in torso space while held (barrels point +z). */
+  position: THREE.Vector3;
+  /** Main (right) hand grip in weapon space. */
+  mainGrip: THREE.Vector3;
+  /** Side handle for the support (left) hand, in weapon space. */
+  supportGrip: THREE.Vector3;
+}
+
+/** Upper arm: shoulder pivot to elbow pivot. */
+export const TITAN_UPPER_ARM_LENGTH = 2.2;
+/** Forearm: elbow pivot to the centre of the fist. */
+export const TITAN_FOREARM_LENGTH = 2.4;
+
+export const XO16_MOUNTS: Record<TitanGripStyle, TitanWeaponMount> = {
+  below: {
+    style: 'below',
+    position: new THREE.Vector3(0.45, -2.25, 1.75),
+    mainGrip: new THREE.Vector3(0, 0.95, 0.3),
+    supportGrip: new THREE.Vector3(-1.0, 0, 0.75),
+  },
+  above: {
+    style: 'above',
+    position: new THREE.Vector3(0.45, -1.35, 1.75),
+    mainGrip: new THREE.Vector3(0, -0.95, 0.05),
+    supportGrip: new THREE.Vector3(-1.0, 0, 0.75),
+  },
+};
+
+/** The XO-16's grip style. Switch to 'above' to carry it on a pistol grip instead. */
+export const XO16_GRIP_STYLE: TitanGripStyle = 'below';
+
+/**
+ * Analytic two-bone IK in 3D. Places the elbow in the plane containing the
+ * shoulder, the target and the `pole` hint (the direction the elbow should
+ * point), then returns the elbow position and the hand position actually
+ * reached (the target, pulled in if it is out of reach).
+ */
+export function solveArmIK(
+  shoulder: THREE.Vector3,
+  target: THREE.Vector3,
+  upper: number,
+  lower: number,
+  pole: THREE.Vector3,
+): { elbow: THREE.Vector3; hand: THREE.Vector3 } {
+  const toTarget = target.clone().sub(shoulder);
+  const rawDist = toTarget.length();
+  const dir = rawDist > 1e-6 ? toTarget.divideScalar(rawDist) : new THREE.Vector3(0, -1, 0);
+  const minReach = Math.abs(upper - lower) + 1e-3;
+  const maxReach = upper + lower - 1e-3;
+  const d = THREE.MathUtils.clamp(rawDist, minReach, maxReach);
+
+  // Distance along the shoulder→hand line to the foot of the elbow, and the elbow's offset from it
+  const a = (upper * upper - lower * lower + d * d) / (2 * d);
+  const h = Math.sqrt(Math.max(0, upper * upper - a * a));
+
+  // Bend direction: the pole hint with its component along the arm removed
+  const bend = pole.clone().addScaledVector(dir, -pole.dot(dir));
+  if (bend.lengthSq() < 1e-8) bend.set(0, -1, 0).addScaledVector(dir, dir.y);
+  bend.normalize();
+
+  const elbow = shoulder.clone().addScaledVector(dir, a).addScaledVector(bend, h);
+  const hand = shoulder.clone().addScaledVector(dir, d);
+  return { elbow, hand };
+}
+
+const _down = new THREE.Vector3(0, -1, 0);
+
+/** Rotate an arm (shoulder group + elbow group, both built pointing -Y) so its fist lands on `target` (torso space). */
+function aimArm(arm: THREE.Group, elbow: THREE.Group, target: THREE.Vector3, pole: THREE.Vector3): void {
+  const ik = solveArmIK(arm.position, target, TITAN_UPPER_ARM_LENGTH, TITAN_FOREARM_LENGTH, pole);
+  const upperDir = ik.elbow.clone().sub(arm.position).normalize();
+  arm.quaternion.setFromUnitVectors(_down, upperDir);
+  // Forearm direction expressed in the upper arm's frame
+  const lowerDir = ik.hand.clone().sub(ik.elbow).normalize().applyQuaternion(arm.quaternion.clone().invert());
+  elbow.quaternion.setFromUnitVectors(_down, lowerDir);
+}
+
+/**
+ * Two-handed hold: place the weapon in front of the torso, then solve both arms
+ * so the right fist closes on the main grip and the left fist on the side
+ * handle. `crouch` (0..1) lowers the weapon slightly for the landing pose.
  */
 export function poseTitanArms(rig: TitanRig, crouch: number): void {
   const c = THREE.MathUtils.clamp(crouch, 0, 1);
-  // Right: upper arm + elbow ≈ -π/2 keeps the forearm level; crouching tips the muzzle down a little
-  // (the torso pitches forward when crouching, so the arms barely dip themselves)
-  rig.rightArm.rotation.set(-0.3 - c * 0.05, 0, -0.08 - c * 0.08);
-  rig.rightElbow.rotation.set(-1.3 + c * 0.05, 0, 0);
-  // Left: bent guard, forearm angled in across the body
-  rig.leftArm.rotation.set(-0.45 + c * 0.05, 0.25, 0.1 + c * 0.1);
-  rig.leftElbow.rotation.set(-1.15 + c * 0.1, 0, 0);
+  const mount = rig.weaponMount;
+  rig.weapon.position.copy(mount.position).add(new THREE.Vector3(0, -0.25 * c, 0.1 * c));
+  rig.weapon.rotation.set(-0.12 * c, 0, 0);
+  rig.weapon.updateMatrix();
+
+  const main = mount.mainGrip.clone().applyMatrix4(rig.weapon.matrix);
+  const support = mount.supportGrip.clone().applyMatrix4(rig.weapon.matrix);
+
+  // Elbows: flared out and back when gripping over the top, tucked down when holding a pistol grip
+  const rightPole = mount.style === 'below' ? new THREE.Vector3(1, -0.2, -0.7) : new THREE.Vector3(0.5, -1, -0.5);
+  const leftPole = new THREE.Vector3(-1, -0.8, -0.3);
+  aimArm(rig.rightArm, rig.rightElbow, main, rightPole);
+  aimArm(rig.leftArm, rig.leftElbow, support, leftPole);
 }
 
 /* ------------------------------------------------------------------ */
@@ -255,7 +361,7 @@ function buildTorso(m: TitanMaterials): { torso: THREE.Mesh; visor: THREE.Mesh }
 }
 
 function buildArm(m: TitanMaterials, side: -1 | 1): {
-  arm: THREE.Group; elbow: THREE.Group; shoulder: THREE.Mesh; forearm: THREE.Mesh; fist: THREE.Mesh;
+  arm: THREE.Group; elbow: THREE.Group; shoulder: THREE.Mesh; forearm: THREE.Mesh; fist: THREE.Mesh; pauldron: THREE.Mesh;
 } {
   const arm = new THREE.Group();
 
@@ -287,15 +393,29 @@ function buildArm(m: TitanMaterials, side: -1 | 1): {
   part(fist, bevelBox(0.97, 0.32, 0.4, 0.08), m.dark, 0, -0.32, 0.38);
   part(fist, bevelBox(0.26, 0.5, 0.3, 0.08), m.dark, -side * 0.5, -0.05, 0.3);
 
-  return { arm, elbow, shoulder, forearm, fist };
+  return { arm, elbow, shoulder, forearm, fist, pauldron };
 }
 
 /** XO-16 rotary cannon held in the right hand, barrels pointing +z. */
-function buildCannon(m: TitanMaterials): { cannon: THREE.Group; muzzles: THREE.Vector3[] } {
+function buildCannon(m: TitanMaterials, mount: TitanWeaponMount): { cannon: THREE.Group; muzzles: THREE.Vector3[] } {
   const cannon = new THREE.Group();
   part(cannon, bevelBox(0.8, 1.0, 2.4, 0.15, 0.15), m.frame, 0, 0, 0.5);          // receiver
   part(cannon, bevelBox(0.82, 0.14, 1.6, 0.04), m.accent, 0, 0.35, 0.6);           // stripe
-  part(cannon, bevelBox(0.3, 0.3, 1.2, 0.08), m.paintDark, 0, 0.62, 0.3);          // carry handle
+
+  // Main grip: a top handle when the weapon hangs below the hand, a pistol grip when it sits above
+  const g = mount.mainGrip;
+  if (mount.style === 'below') {
+    for (const dz of [-0.45, 0.45]) part(cannon, bevelBox(0.22, 0.45, 0.22, 0.05), m.frame, 0, 0.62, g.z + dz); // posts
+    part(cannon, bevelBox(0.26, 0.24, 1.2, 0.08), m.paintDark, 0, g.y - 0.08, g.z);                            // bar
+  } else {
+    part(cannon, bevelBox(0.34, 0.75, 0.42, 0.08), m.paintDark, 0, g.y + 0.12, g.z, 0.25);                     // pistol grip
+    part(cannon, bevelBox(0.1, 0.1, 0.55, 0.03), m.frame, 0, -0.62, g.z + 0.3);                                 // trigger guard
+  }
+
+  // Side handle for the support hand: bracket off the left of the receiver and a vertical bar
+  const sg = mount.supportGrip;
+  part(cannon, bevelBox(Math.abs(sg.x) - 0.3, 0.22, 0.3, 0.05), m.frame, (sg.x - 0.4) / 2 + 0.05, sg.y, sg.z);
+  part(cannon, bevelBox(0.24, 0.9, 0.26, 0.08), m.paintDark, sg.x, sg.y, sg.z);
   part(cannon, tube(0.5, 0.5, 0.35, 28), m.frame, 0, 0.0, 1.85);                    // front collar
   part(cannon, tube(0.46, 0.46, 1.1, 28, true), m.dark, 0, 0.0, 2.5);              // shroud
   const barrels = new THREE.Group();
@@ -308,7 +428,7 @@ function buildCannon(m: TitanMaterials): { cannon: THREE.Group; muzzles: THREE.V
   part(barrels, tube(0.36, 0.36, 0.14, 24), m.frame, 0, 0, 1.45);                  // muzzle ring
   part(cannon, axle(0.55, 0.55, 28), m.paintDark, 0.7, -0.2, 0.2);                  // ammo drum
   part(cannon, axle(0.25, 0.6, 16), m.accent, 0.7, -0.2, 0.2);
-  part(cannon, bevelBox(0.45, 0.35, 0.5, 0.08), m.frame, 0.35, -0.55, 0.4);        // feed chute
+  part(cannon, bevelBox(0.45, 0.35, 0.5, 0.08), m.frame, 0.35, mount.style === 'below' ? -0.55 : -0.3, 0.8); // feed chute
   return { cannon, muzzles: [new THREE.Vector3(0.12, 0, 3.9), new THREE.Vector3(-0.12, 0, 3.9)] };
 }
 
@@ -354,7 +474,7 @@ function buildLeg(m: TitanMaterials, side: -1 | 1): TitanLegRig {
  * Build the Titan under `body` (the group that crouches). Legs attach to `body`
  * at hip height, the torso sits at `torsoHeight`.
  */
-export function buildTitanModel(body: THREE.Group, torsoHeight: number): TitanRig {
+export function buildTitanModel(body: THREE.Group, torsoHeight: number, mount: TitanWeaponMount = XO16_MOUNTS[XO16_GRIP_STYLE]): TitanRig {
   const m = makeMaterials();
 
   // Pelvis, waist and hip armour
@@ -370,16 +490,18 @@ export function buildTitanModel(body: THREE.Group, torsoHeight: number): TitanRi
 
   const left = buildArm(m, -1);
   const right = buildArm(m, 1);
-  left.arm.position.set(-2.55, 0.75, -0.1);
-  right.arm.position.set(2.55, 0.75, -0.1);
+  left.arm.position.set(-TITAN_SHOULDER.x, TITAN_SHOULDER.y, TITAN_SHOULDER.z);
+  right.arm.position.copy(TITAN_SHOULDER);
   torso.add(left.arm, right.arm);
+  // Pauldrons belong to the chassis, so they don't swing with the IK-driven arms
+  for (const a of [left, right]) {
+    a.pauldron.position.add(a.arm.position);
+    torso.add(a.pauldron);
+  }
 
-  // Cannon lies along the forearm (elbow -Y), carry handle on top (elbow +Z),
-  // slung under the forearm with the fist wrapped over the receiver
-  const { cannon, muzzles } = buildCannon(m);
-  cannon.rotation.x = Math.PI / 2;
-  cannon.position.set(0.1, -1.6, -0.95);
-  right.elbow.add(cannon);
+  // Weapon held in front of the torso; the arms reach for its grips (see poseTitanArms)
+  const { cannon, muzzles } = buildCannon(m, mount);
+  torso.add(cannon);
 
   const leftLeg = buildLeg(m, -1);
   const rightLeg = buildLeg(m, 1);
@@ -387,12 +509,6 @@ export function buildTitanModel(body: THREE.Group, torsoHeight: number): TitanRi
   rightLeg.hip.position.set(1.25, TITAN_HIP_HEIGHT, -0.05);
   body.add(leftLeg.hip, rightLeg.hip);
 
-  // Muzzles expressed in forearm space (fire origin when not in first person).
-  // Cannon and forearm share the elbow as parent, so this is pose-independent.
-  cannon.updateMatrix();
-  right.forearm.updateMatrix();
-  const forearmInverse = right.forearm.matrix.clone().invert();
-  const muzzleOffsets = muzzles.map((p) => p.clone().applyMatrix4(cannon.matrix).applyMatrix4(forearmInverse));
 
   const rig: TitanRig = {
     torso,
@@ -409,7 +525,9 @@ export function buildTitanModel(body: THREE.Group, torsoHeight: number): TitanRi
     rightFist: right.fist,
     leftLeg,
     rightLeg,
-    muzzleOffsets,
+    weapon: cannon,
+    weaponMount: mount,
+    muzzleOffsets: muzzles,
   };
   poseTitanLegs(rig, 0);
   poseTitanArms(rig, 0);

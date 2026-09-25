@@ -1,5 +1,6 @@
 import { DebugHUDData, GameState, GameStats, WeaponHUDData } from './types';
 import { Level, LevelType } from './levels';
+import { GraphicsQuality, GRAPHICS_QUALITY_LABELS, getGraphicsQuality } from './graphicsSettings';
 import { Bindings, DEFAULT_BINDINGS, ACTION_LABELS, getBindings, setBindings, keyCodeToLabel, rebind, AimCurve, AIM_CURVE_LABELS, getAimCurve, setAimCurve } from './keybindings';
 
 export interface HUDUpdateData {
@@ -54,8 +55,10 @@ export class GameUI {
   private isRebinding = false;
   private controlsRowButtons: Map<string, HTMLButtonElement> = new Map();
   private controlsOnBack: (() => void) | null = null;
+  private onGraphicsQualityChange: ((quality: GraphicsQuality) => void) | null = null;
 
-  init(onTogglePause: () => void, onCallTitan: () => void): void {
+  init(onTogglePause: () => void, onCallTitan: () => void, onGraphicsQualityChange?: (quality: GraphicsQuality) => void): void {
+    this.onGraphicsQualityChange = onGraphicsQualityChange ?? null;
     // Global Visor Container
     const visor = document.createElement('div');
     visor.id = 'visor-container';
@@ -1538,6 +1541,30 @@ export class GameUI {
     curveRow.appendChild(curveLabel);
     curveRow.appendChild(curveSelect);
     list.appendChild(curveRow);
+
+    // Graphics quality selector
+    const gfxRow = document.createElement('div');
+    gfxRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:15px;margin-top:14px;';
+    const gfxLabel = document.createElement('span');
+    gfxLabel.textContent = 'Graphics Quality';
+    gfxLabel.style.cssText = curveLabel.style.cssText;
+    const gfxSelect = document.createElement('div');
+    gfxSelect.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+    const currentQuality = getGraphicsQuality();
+    for (const key of Object.keys(GRAPHICS_QUALITY_LABELS) as GraphicsQuality[]) {
+      const btn = document.createElement('button');
+      btn.className = 'menu-button';
+      const isActive = key === currentQuality;
+      btn.style.cssText = `width:auto;margin:0;padding:8px 12px;font-size:12px;clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);${isActive ? 'background:rgba(0,255,204,0.3);color:#fff;border-color:#00ffcc;' : 'background:rgba(0,0,0,0.3);color:#888;border:1px solid rgba(0,255,204,0.1);'}`;
+      btn.textContent = GRAPHICS_QUALITY_LABELS[key];
+      btn.onclick = () => {
+        this.onGraphicsQualityChange?.(key);
+        this.rebuildControlsList();
+      };
+      gfxSelect.appendChild(btn);
+    }
+    gfxRow.append(gfxLabel, gfxSelect);
+    list.appendChild(gfxRow);
   }
 
   private getControllerLabel(action: keyof Bindings): string {

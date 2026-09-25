@@ -7,9 +7,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // Keep the large, rarely-changing engine libraries in their own cacheable chunks
-        manualChunks: {
-          three: ['three'],
-          physics: ['cannon-es'],
+        manualChunks(id) {
+          if (id.includes('node_modules/three/')) return 'three';
+          if (id.includes('node_modules/cannon-es/')) return 'physics';
+          return undefined;
         },
       },
     },

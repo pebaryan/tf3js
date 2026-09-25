@@ -14,9 +14,15 @@ Click the image above to watch a gameplay demo on YouTube.
 - **Titans**: fill your meter, call in a Titan, embark, dash and fight with the XO-16 chaingun
 - **10 pilot weapons** with distinct ballistics (bullet drop, shotgun spreads, explosive EPG rounds) and per-weapon reticles
 - **Attachments**: optics, extended/quick-reload magazines, stabilizer and suppressor
-- **Enemy AI** that patrols, chases, strafes, flanks, seeks cover and leads its shots
-- **Six missions** across training, capture, race and survival modes
+- **Enemies**:
+  - **Grunts** fight in squads: whoever spots you radios the rest; they take cover behind real geometry, peek out to fire bursts, reload, and run from titans
+  - **Ticks** lie dormant until they see you, then scuttle in on a weave, arm with an accelerating beep and explode (shooting one nearby still hurts — and their blasts hurt other enemies)
+  - **Reapers** are 3 m bipedal machines that fire homing rocket salvos, stomp anything underfoot and launch ticks from their backs
+- **Pilot health regenerates** after a few seconds out of fire
+- **Seven missions** across training, capture, race and survival modes
 - **Rebindable keys** and full **gamepad** support (menus and gameplay), with selectable aim response curves
+- **Modern rendering**: HDR post-processing with bloom, MSAA/FXAA, ground-truth ambient occlusion (Ultra), image-based lighting from the sky, camera-following soft shadows, dynamic muzzle-flash/explosion lights and hit-feedback colour grading
+- **Graphics quality presets** (Low / Medium / High / Ultra) in **Configurations**
 
 ## Controls
 
@@ -53,7 +59,8 @@ You can carry two weapons. Picking one up fills a free slot, or swaps it for the
 | 3 | Training: Sliding | Destroy 3 targets within 90 seconds |
 | 4 | Capture: Outpost Alpha | Hold the capture points for 30 seconds |
 | 5 | Race: Speed Course | Reach all checkpoints within 60 seconds |
-| 6 | Survival: Last Stand | Survive 60 seconds against waves of enemies |
+| 6 | Survival: Last Stand | Survive 60 seconds against escalating waves (grunts, then ticks, then reapers) |
+| 7 | Survival: Iron Tide | Survive 90 seconds against reapers, ticks and grunt squads |
 
 ## Getting Started
 
@@ -94,11 +101,18 @@ src/
 ├── player.ts        # Pilot controller: input, shooting, grapple, grenades, viewmodel
 ├── movement.ts      # Pilot movement physics (slide, wall-run, mantle, ...)
 ├── titan.ts         # Titan entity: drop-in, embark/exit, piloting, chaingun
-├── enemy.ts         # Enemy AI state machine and shooting
+├── titanModel.ts    # Titan model, rig and leg IK
+├── hostile.ts       # Shared enemy interface, steering and cover helpers
+├── grunt.ts         # Grunt squad AI and model
+├── tick.ts          # Tick (frag drone) AI and model
+├── reaper.ts        # Reaper AI, model, rockets and tick launcher
 ├── target.ts        # Training targets
 ├── weapons.ts       # Weapon/attachment definitions and WeaponManager
 ├── ballistics.ts    # Projectile simulation and trails
 ├── collision.ts     # Pure collision/damage helpers and scene disposal
+├── graphics.ts      # Render pipeline: post-processing, shadows, IBL, flash lights
+├── graphicsSettings.ts # Graphics quality presets
+├── geometryUtils.ts # Bevelled boxes and geometry merging
 ├── effects.ts       # Impacts, muzzle flashes, explosions
 ├── reticle.ts       # Per-weapon crosshairs and hitmarkers
 ├── radar.ts         # Enemy radar and damage-direction indicators
@@ -115,7 +129,7 @@ src/
 
 1. Add an entry to `LEVELS` in `src/levels.ts`.
 2. Add any mission-specific geometry in `createLevel()` in `src/level.ts`.
-3. Add target spawns in `Game.getTargetSpawnPositions()` and enemy spawns in `Game.getEnemySpawnPositions()`.
+3. Set `enemyCount` / `tickCount` / `reaperCount` on the level, and add target and enemy spawn points in `Game.getTargetSpawnPositions()`, `Game.getEnemySpawnPositions()` and `Game.getTickSpawnPositions()`.
 
 ## License
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+import { bevelBox, mergeAndDispose, placedBox } from './geometryUtils';
 
 // --- Procedural grid texture (1m squares) for measuring displacement ---
 function makeGridTexture(gridColor: number, bgColor: number, size: number): THREE.CanvasTexture {
@@ -57,6 +58,7 @@ function makeGridTexture(gridColor: number, bgColor: number, size: number): THRE
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.anisotropy = 8;
+  tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
@@ -113,6 +115,27 @@ const slideRampMaterial = new THREE.MeshStandardMaterial({
   roughness: 0.5,
 });
 
+// Structural trim: machined gunmetal for copings, plinths, ribs and platform edges
+const trimMaterial = new THREE.MeshStandardMaterial({
+  color: 0x2b333d,
+  metalness: 0.75,
+  roughness: 0.35,
+});
+
+// Recessed panel seams on large wall faces
+const seamMaterial = new THREE.MeshStandardMaterial({
+  color: 0x9aa6b2,
+  metalness: 0.3,
+  roughness: 0.55,
+});
+
+/** Height of the metal coping that caps every wall (kept inside the wall's collision height). */
+const COPING_HEIGHT = 0.16;
+/** Height of the dark plinth at the foot of walls. */
+const PLINTH_HEIGHT = 0.28;
+/** Spacing of the vertical ribs along long walls. */
+const RIB_SPACING = 4;
+
 let neonStrips: THREE.Mesh[] = [];
 
 export function updateLevelVisuals(time: number) {
@@ -121,23 +144,164 @@ export function updateLevelVisuals(time: number) {
   neonMaterial.opacity = 0.6 + pulse * 0.4;
 }
 
-function addNeonAccents(mesh: THREE.Mesh, w: number, h: number, d: number) {
-  // Add a thin neon strip at the top and bottom of walls
+/**
+ * Thin glowing strips wrapped around a block. `topInset` pushes the upper strip
+ * down so it sits below a coping or edge band instead of being hidden by it.
+ */
+function addNeonAccents(mesh: THREE.Mesh, w: number, h: number, d: number, topInset = 0, bottom = true) {
   const stripHeight = 0.05;
-  
-  // Top strips
-  const topGeo = new THREE.BoxGeometry(w + 0.02, stripHeight, d + 0.02);
-  const topStrip = new THREE.Mesh(topGeo, neonMaterial);
-  topStrip.position.y = h / 2 - stripHeight;
-  mesh.add(topStrip);
-  neonStrips.push(topStrip);
 
-  // Bottom strips
-  const botGeo = new THREE.BoxGeometry(w + 0.02, stripHeight, d + 0.02);
-  const botStrip = new THREE.Mesh(botGeo, neonMaterial);
-  botStrip.position.y = -h / 2 + stripHeight;
-  mesh.add(botStrip);
-  neonStrips.push(botStrip);
+  if (h - topInset > stripHeight * 4) {
+    const topStrip = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, stripHeight, d + 0.02), neonMaterial);
+    topStrip.position.y = h / 2 - topInset - stripHeight;
+    mesh.add(topStrip);
+    neonStrips.push(topStrip);
+  }
+
+  if (bottom) {
+    const botStrip = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, stripHeight, d + 0.02), neonMaterial);
+    botStrip.position.y = -h / 2 + stripHeight;
+    mesh.add(botStrip);
+    neonStrips.push(botStrip);
+  }
+}
+
+/**
+ * Decorative architecture for a wall block: a metal coping on top, a plinth at
+ * the base and, on long thin walls, vertical ribs and a horizontal panel seam.
+ * Everything is merged into one child mesh per material (one draw call each).
+ *
+ * These are children of the wall, so gameplay raycasts (which only test the
+ * scene's top-level meshes) and physics are unaffected.
+ */
+function addWallDetail(wall: THREE.Mesh, width: number, height: number, depth: number) {
+  const trim: THREE.BufferGeometry[] = [];
+  const seams: THREE.BufferGeometry[] = [];
+  const top = height / 2;
+  const bottom = -height / 2;
+
+  // Coping: slightly proud of the faces, flush with the top so feet never clip it
+  const copingH = Math.min(COPING_HEIGHT, height * 0.2);
+  trim.push(placedBox(width + 0.1, copingH, depth + 0.1, 0, top - copingH / 2 + 0.005, 0));
+
+  // Plinth
+  if (height > 1.2) {
+    const plinthH = Math.min(PLINTH_HEIGHT, height * 0.15);
+    trim.push(placedBox(width + 0.08, plinthH, depth + 0.08, 0, bottom + plinthH / 2, 0));
+  }
+
+  // Ribs and seams only on long, thin walls (corridors, boundaries)
+  const alongX = width >= depth;
+  const length = alongX ? width : depth;
+  const thickness = alongX ? depth : width;
+  if (length > 6 && thickness < 1.5 && height > 2) {
+    const ribH = height - copingH - PLINTH_HEIGHT;
+    const ribY = bottom + PLINTH_HEIGHT + ribH / 2;
+    const count = Math.max(1, Math.floor(length / RIB_SPACING));
+    const start = -((count - 1) * RIB_SPACING) / 2;
+    for (let i = 0; i < count; i++) {
+      const along = start + i * RIB_SPACING;
+      for (const side of [-1, 1]) {
+        const off = side * (thickness / 2 + 0.03);
+        trim.push(alongX
+          ? placedBox(0.28, ribH, 0.06, along, ribY, off)
+          : placedBox(0.06, ribH, 0.28, off, ribY, along));
+      }
+    }
+
+    // Horizontal seam band at roughly door-frame height
+    const seamY = Math.min(bottom + 3, top - copingH - 0.6);
+    for (const side of [-1, 1]) {
+      const off = side * (thickness / 2 + 0.008);
+      seams.push(alongX
+        ? placedBox(length - 0.2, 0.06, 0.016, 0, seamY, off)
+        : placedBox(0.016, 0.06, length - 0.2, off, seamY, 0));
+    }
+  }
+
+  const trimGeo = mergeAndDispose(trim);
+  if (trimGeo) {
+    const trimMesh = new THREE.Mesh(trimGeo, trimMaterial);
+    trimMesh.castShadow = true;
+    trimMesh.receiveShadow = true;
+    wall.add(trimMesh);
+  }
+  const seamGeo = mergeAndDispose(seams);
+  if (seamGeo) {
+    const seamMesh = new THREE.Mesh(seamGeo, seamMaterial);
+    seamMesh.receiveShadow = true;
+    wall.add(seamMesh);
+  }
+}
+
+/** Metal edge band around the top of a platform, plus corner brackets underneath. */
+function addPlatformDetail(platform: THREE.Mesh, width: number, height: number, depth: number) {
+  const trim: THREE.BufferGeometry[] = [];
+  const bandH = Math.min(0.14, height * 0.4);
+  const bandY = height / 2 - bandH / 2 + 0.004;
+  const t = 0.05;
+  // Four sides of the band, just outside the platform faces (never above the walkable top)
+  trim.push(placedBox(width + 2 * t, bandH, t, 0, bandY, depth / 2 + t / 2));
+  trim.push(placedBox(width + 2 * t, bandH, t, 0, bandY, -depth / 2 - t / 2));
+  trim.push(placedBox(t, bandH, depth, width / 2 + t / 2, bandY, 0));
+  trim.push(placedBox(t, bandH, depth, -width / 2 - t / 2, bandY, 0));
+
+  // Underside corner brackets for raised platforms
+  const bracket = Math.min(0.35, width * 0.12, depth * 0.12);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      trim.push(placedBox(bracket, 0.08, bracket, sx * (width / 2 - bracket / 2), -height / 2 - 0.04, sz * (depth / 2 - bracket / 2)));
+    }
+  }
+
+  const geo = mergeAndDispose(trim);
+  if (!geo) return;
+  const mesh = new THREE.Mesh(geo, trimMaterial);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  platform.add(mesh);
+}
+
+/** Glowing chevrons painted on a slide ramp's top face, pointing down the slope. */
+const chevronTexture = (() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, 128, 128);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 14;
+  ctx.lineCap = 'square';
+  for (const y of [30, 78]) {
+    ctx.beginPath();
+    ctx.moveTo(20, y);
+    ctx.lineTo(64, y + 30);
+    ctx.lineTo(108, y);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+})();
+
+const chevronMaterial = new THREE.MeshBasicMaterial({
+  map: chevronTexture,
+  color: new THREE.Color(0xffd0a0).multiplyScalar(2.2), // HDR so it blooms
+  transparent: true,
+  depthWrite: false,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+});
+
+function addRampChevrons(ramp: THREE.Mesh, width: number, height: number, length: number) {
+  const count = Math.max(1, Math.floor(length / 1.5));
+  for (let i = 0; i < count; i++) {
+    const chevron = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(1.4, width * 0.3), 1.2), chevronMaterial);
+    chevron.rotation.x = -Math.PI / 2;
+    // Ramp's local +z points down the slope (it's tilted by -30° about X)
+    chevron.position.set(0, height / 2 + 0.01, -length / 2 + (i + 0.5) * (length / count));
+    ramp.add(chevron);
+  }
 }
 
 export function createLevel(scene: THREE.Scene, world: CANNON.World, levelConfig?: { layout: string, type: string }) {
@@ -293,6 +457,7 @@ export function createLevel(scene: THREE.Scene, world: CANNON.World, levelConfig
     ctx.fillText('FINISH', 128, 64);
     
     const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
     const signGeo = new THREE.PlaneGeometry(8, 4);
     const signMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
     const sign = new THREE.Mesh(signGeo, signMat);
@@ -330,7 +495,7 @@ function makeBoxMaterial(w: number, h: number, d: number, baseMat: THREE.MeshSta
 }
 
 function createWall(x: number, height: number, z: number, width: number, depth: number, scene: THREE.Scene, world: CANNON.World) {
-  const geo = new THREE.BoxGeometry(width, height, depth);
+  const geo = bevelBox(width, height, depth, 0.05);
   const mat = makeBoxMaterial(width, height, depth, wallMaterial);
   const wall = new THREE.Mesh(geo, mat);
   wall.position.set(x, height / 2, z);
@@ -338,7 +503,8 @@ function createWall(x: number, height: number, z: number, width: number, depth: 
   wall.receiveShadow = true;
   scene.add(wall);
 
-  addNeonAccents(wall, width, height, depth);
+  addNeonAccents(wall, width, height, depth, Math.min(COPING_HEIGHT, height * 0.2) + 0.08, height > 1.2);
+  addWallDetail(wall, width, height, depth);
 
   const shape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2));
   const body = new CANNON.Body({ mass: 0 });
@@ -348,7 +514,7 @@ function createWall(x: number, height: number, z: number, width: number, depth: 
 }
 
 function createPlatform(x: number, y: number, z: number, width: number, height: number, depth: number, scene: THREE.Scene, world: CANNON.World) {
-  const geo = new THREE.BoxGeometry(width, height, depth);
+  const geo = bevelBox(width, height, depth, 0.04);
   const mat = makeBoxMaterial(width, height, depth, platformMaterial);
   const platform = new THREE.Mesh(geo, mat);
   platform.position.set(x, y, z);
@@ -356,7 +522,8 @@ function createPlatform(x: number, y: number, z: number, width: number, height: 
   platform.receiveShadow = true;
   scene.add(platform);
 
-  addNeonAccents(platform, width, height, depth);
+  addNeonAccents(platform, width, height, depth, height, true);
+  addPlatformDetail(platform, width, height, depth);
 
   const shape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2));
   const body = new CANNON.Body({ mass: 0 });
@@ -368,7 +535,7 @@ function createPlatform(x: number, y: number, z: number, width: number, height: 
 function createSlideRamp(x: number, y: number, z: number, width: number, length: number, rotation: number, scene: THREE.Scene, world: CANNON.World) {
   // Create a sloped ramp using a rotated box
   const height = 3;
-  const geo = new THREE.BoxGeometry(width, height, length);
+  const geo = bevelBox(width, height, length, 0.06);
   const mat = makeBoxMaterial(width, height, length, slideRampMaterial);
   const ramp = new THREE.Mesh(geo, mat);
   
@@ -380,6 +547,7 @@ function createSlideRamp(x: number, y: number, z: number, width: number, length:
   scene.add(ramp);
 
   addNeonAccents(ramp, width, height, length);
+  addRampChevrons(ramp, width, height, length);
 
   // Cannon box shape (simpler than rotated trimesh)
   const shape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, length / 2));
@@ -405,6 +573,7 @@ function createDistanceMarker(x: number, z: number, text: string, scene: THREE.S
   ctx.fillText(text + 'm', 64, 32);
   
   const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
   const geo = new THREE.PlaneGeometry(2, 1);
   const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
   const mesh = new THREE.Mesh(geo, mat);

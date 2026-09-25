@@ -13,7 +13,12 @@ export interface Level {
   layout: 'open' | 'corridor' | 'maze' | 'arena';
   objective: string;
   targetCount: number;
+  /** Grunts at the start of the mission (survival sends reinforcements on top). */
   enemyCount: number;
+  /** Ticks placed dormant around the map at the start. */
+  tickCount?: number;
+  /** Reapers deployed at the start. */
+  reaperCount?: number;
   timeLimit: number | null;
   requiredScore: number;
 }
@@ -64,6 +69,7 @@ export const LEVELS: Level[] = [
     objective: 'Hold capture points for 30 seconds',
     targetCount: 0,
     enemyCount: 4,
+    tickCount: 2,
     timeLimit: 180,
     requiredScore: 1000
   },
@@ -76,6 +82,7 @@ export const LEVELS: Level[] = [
     objective: 'Reach the finish line',
     targetCount: 0,
     enemyCount: 2,
+    tickCount: 3,
     timeLimit: 60,
     requiredScore: 1200
   },
@@ -90,5 +97,19 @@ export const LEVELS: Level[] = [
     enemyCount: 6,
     timeLimit: 60,
     requiredScore: 1500
+  },
+  {
+    id: 7,
+    name: 'Survival: Iron Tide',
+    type: LevelType.SURVIVAL,
+    description: 'Hold out against reapers, ticks and grunt squads',
+    layout: 'open',
+    objective: 'Survive for 90 seconds',
+    targetCount: 0,
+    enemyCount: 4,
+    tickCount: 4,
+    reaperCount: 1,
+    timeLimit: 90,
+    requiredScore: 2500
   }
 ];

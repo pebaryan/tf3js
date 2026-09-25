@@ -4,6 +4,7 @@ import { BulletVisuals } from './weapons';
 export interface Bullet {
   mesh: THREE.Mesh;
   meshType?: string;
+  /** Tapered glowing streak from the oldest recorded position to the bullet. */
   trail: THREE.Mesh | null;
   trailPositions: THREE.Vector3[];
   maxTrailLength: number;
@@ -18,6 +19,44 @@ export interface Bullet {
   damage: number;
 }
 
+/*
+ * Shared GPU resources. Bullets are created and destroyed many times a second,
+ * so every round reuses cached geometries/materials and only updates its
+ * transform, instead of allocating (and uploading) new buffers each frame.
+ */
+const geometryCache = new Map<string, THREE.BufferGeometry>();
+const materialCache = new Map<string, THREE.Material>();
+
+function cachedGeometry(key: string, create: () => THREE.BufferGeometry): THREE.BufferGeometry {
+  let geo = geometryCache.get(key);
+  if (!geo) {
+    geo = create();
+    geometryCache.set(key, geo);
+  }
+  return geo;
+}
+
+function cachedMaterial(key: string, create: () => THREE.Material): THREE.Material {
+  let mat = materialCache.get(key);
+  if (!mat) {
+    mat = create();
+    materialCache.set(key, mat);
+  }
+  return mat;
+}
+
+/** Unit streak spanning y ∈ [0, 1]: full width at the head (y = 1), tapering to the tail. */
+function trailGeometry(): THREE.BufferGeometry {
+  return cachedGeometry('trail', () => {
+    const geo = new THREE.CylinderGeometry(1, 0.12, 1, 8, 1, true);
+    geo.translate(0, 0.5, 0);
+    return geo;
+  });
+}
+
+const _up = new THREE.Vector3(0, 1, 0);
+const _dir = new THREE.Vector3();
+
 export class BallisticsSystem {
   private scene: THREE.Scene;
 
@@ -26,48 +65,35 @@ export class BallisticsSystem {
   }
 
   createBullet(startPos: THREE.Vector3, velocity: THREE.Vector3, visuals: BulletVisuals): Bullet {
-    // Create bullet mesh
-    let geo: THREE.BufferGeometry;
-    if (visuals.meshType === 'capsule') {
-      geo = new THREE.CapsuleGeometry(visuals.radius, visuals.length, 4, 8);
-    } else {
-      geo = new THREE.SphereGeometry(visuals.radius, 8, 8);
-    }
-    const mat = new THREE.MeshBasicMaterial({ color: visuals.color });
+    const geo = visuals.meshType === 'capsule'
+      ? cachedGeometry(`capsule:${visuals.radius}:${visuals.length}`, () => new THREE.CapsuleGeometry(visuals.radius, visuals.length, 4, 8))
+      : cachedGeometry(`sphere:${visuals.radius}`, () => new THREE.SphereGeometry(visuals.radius, 8, 8));
+    // HDR tracer colour so rounds glow under bloom
+    const mat = cachedMaterial(`core:${visuals.color}`, () => new THREE.MeshBasicMaterial({
+      color: new THREE.Color(visuals.color).multiplyScalar(4),
+    }));
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(startPos);
     mesh.userData.ignoreRaycast = true;
-
-    // Orient bullet along velocity
-    if (velocity.length() > 0.1) {
-      const lookTarget = startPos.clone().add(velocity);
-      mesh.lookAt(lookTarget);
-      if (visuals.meshType === 'capsule') {
-        mesh.rotateX(-Math.PI / 2);
-      }
-    }
+    mesh.frustumCulled = false;
+    this.orient(mesh, velocity, visuals.meshType);
     this.scene.add(mesh);
 
-    // Create trail if enabled
     let trail: THREE.Mesh | null = null;
     const trailRadius = Math.max(visuals.radius * 0.9, 0.012);
     if (visuals.hasTrail) {
-      const trailGeo = new THREE.TubeGeometry(
-        new THREE.CatmullRomCurve3([startPos.clone(), startPos.clone().add(velocity.clone().setLength(0.01))]),
-        1,
-        trailRadius,
-        6,
-        false,
-      );
-      const trailMat = new THREE.MeshBasicMaterial({
-        color: visuals.trailColor,
+      const trailMat = cachedMaterial(`trail:${visuals.trailColor}`, () => new THREE.MeshBasicMaterial({
+        color: new THREE.Color(visuals.trailColor).multiplyScalar(2),
         transparent: true,
-        opacity: 0.28,
+        opacity: 0.3,
         blending: THREE.AdditiveBlending, // Glow effect
         depthWrite: false,
-      });
-      trail = new THREE.Mesh(trailGeo, trailMat);
+        side: THREE.DoubleSide,
+      }));
+      trail = new THREE.Mesh(trailGeometry(), trailMat);
       trail.userData.ignoreRaycast = true;
+      trail.frustumCulled = false;
+      trail.visible = false; // needs two samples before it has a length
       this.scene.add(trail);
     }
 
@@ -88,6 +114,16 @@ export class BallisticsSystem {
     };
   }
 
+  private orient(mesh: THREE.Mesh, velocity: THREE.Vector3, meshType?: string): void {
+    if (velocity.lengthSq() < 0.01) return;
+    if (meshType === 'capsule') {
+      // Capsule is Y-up; align its axis with the direction of travel
+      mesh.quaternion.setFromUnitVectors(_up, _dir.copy(velocity).normalize());
+    } else {
+      mesh.lookAt(_dir.copy(mesh.position).add(velocity));
+    }
+  }
+
   updateBullet(bullet: Bullet, delta: number): void {
     bullet.time += delta;
 
@@ -95,58 +131,37 @@ export class BallisticsSystem {
     bullet.velocity.y += bullet.gravity * delta;
 
     // Integrate position
-    bullet.mesh.position.add(bullet.velocity.clone().multiplyScalar(delta));
+    bullet.mesh.position.addScaledVector(bullet.velocity, delta);
+    this.orient(bullet.mesh, bullet.velocity, bullet.meshType);
 
-    // Orient mesh along velocity
-    if (bullet.velocity.length() > 0.1) {
-      const lookTarget = bullet.mesh.position.clone().add(bullet.velocity);
-      bullet.mesh.lookAt(lookTarget);
-      // Re-apply rotation for capsule mesh (originally Y-up)
-      if (bullet.meshType === 'capsule') {
-        bullet.mesh.rotateX(-Math.PI / 2);
-      }
+    const trail = bullet.trail;
+    if (!trail) return;
+
+    // Record history; the streak runs from the oldest sample to the bullet
+    const history = bullet.trailPositions;
+    const recycled = history.length >= bullet.maxTrailLength ? history.pop()! : new THREE.Vector3();
+    history.unshift(recycled.copy(bullet.mesh.position));
+
+    const tail = history[history.length - 1];
+    _dir.copy(bullet.mesh.position).sub(tail);
+    const length = _dir.length();
+    if (length < 1e-3) {
+      trail.visible = false;
+      return;
     }
-
-    // Update trail
-    if (bullet.trail) {
-      bullet.trailPositions.unshift(bullet.mesh.position.clone());
-      if (bullet.trailPositions.length > bullet.maxTrailLength) {
-        bullet.trailPositions.pop();
-      }
-
-      if (bullet.trailPositions.length >= 2) {
-        const curve = new THREE.CatmullRomCurve3(
-          bullet.trailPositions.map((pos) => pos.clone()),
-          false,
-          'centripetal',
-        );
-        const nextGeometry = new THREE.TubeGeometry(
-          curve,
-          Math.max(2, bullet.trailPositions.length - 1),
-          bullet.trailRadius,
-          6,
-          false,
-        );
-        bullet.trail.geometry.dispose();
-        bullet.trail.geometry = nextGeometry;
-
-        // Fade trail based on age
-        const alpha = 1 - bullet.time / bullet.maxLifetime;
-        (bullet.trail.material as THREE.MeshBasicMaterial).opacity = Math.max(0, alpha * 0.22);
-      }
-    }
+    // Thin out as the round ages instead of fading opacity, so the material can be shared
+    const age = Math.max(0, 1 - bullet.time / bullet.maxLifetime);
+    const radius = bullet.trailRadius * (0.35 + 0.65 * age);
+    trail.visible = true;
+    trail.position.copy(tail);
+    trail.quaternion.setFromUnitVectors(_up, _dir.divideScalar(length));
+    trail.scale.set(radius, length, radius);
   }
 
+  /** Remove a bullet from the scene. Geometry and materials are shared, so nothing is disposed. */
   disposeBullet(bullet: Bullet): void {
     this.scene.remove(bullet.mesh);
-    bullet.mesh.geometry.dispose();
-    (bullet.mesh.material as THREE.Material).dispose();
-
-    if (bullet.trail) {
-      this.scene.remove(bullet.trail);
-      bullet.trail.geometry.dispose();
-      (bullet.trail.material as THREE.Material).dispose();
-    }
+    if (bullet.trail) this.scene.remove(bullet.trail);
   }
 
   /**

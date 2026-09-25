@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { Target } from './target';
-import { Enemy } from './enemy';
+import { Grunt } from './grunt';
+import { Tick } from './tick';
+import { Reaper } from './reaper';
+import { Hostile, HostileContext } from './hostile';
+import { ImpactEffectsRenderer } from './effects';
 import { createLevel, updateLevelVisuals } from './level';
 import { LevelType, Level, LEVELS } from './levels';
 import { Player, createWeaponMesh } from './player';
@@ -11,6 +15,8 @@ import { GameUI } from './ui';
 import { Weapon, Attachment, ATTACHMENTS, cloneWeapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
 import { getBindings, keyCodeToLabel } from './keybindings';
 import { disposeObject3D } from './collision';
+import { GraphicsPipeline } from './graphics';
+import { GraphicsQuality, getGraphicsQuality, setGraphicsQuality } from './graphicsSettings';
 
 interface WeaponPickup {
   weapon: Weapon;
@@ -46,9 +52,9 @@ const CAPTURE_WIN_TIME = 30;
 const CAPTURE_RADIUS = 3;
 const CHECKPOINT_RADIUS = 4;
 const TITAN_EMBARK_RANGE = 3;
-/** Enemy bullet damage applied to the pilot (titan hull takes the same, shields first). */
-const ENEMY_BULLET_DAMAGE = 8;
-const PLAYER_HITBOX_RADIUS = 0.5;
+/** Enemy fire hitbox for the pilot: a sphere from about the shins to the head (body centre + 0.6 m). */
+const PLAYER_HITBOX_RADIUS = 0.7;
+const PLAYER_HITBOX_HEIGHT = 0.6;
 
 export class Game {
   scene!: THREE.Scene;
@@ -58,7 +64,13 @@ export class Game {
   world!: CANNON.World;
   clock!: THREE.Clock;
   targets: Target[] = [];
-  enemies: Enemy[] = [];
+  /** Every AI hostile (grunts, ticks, reapers), including ones playing a death animation. */
+  enemies: Hostile[] = [];
+  /** World-space effects owned by the level (enemy impacts, explosions), independent of who spawned them. */
+  private worldEffects: ImpactEffectsRenderer | null = null;
+  private reapersSpawned = 0;
+  private scoredKills = new WeakSet<Hostile>();
+  private nextSquadId = 1;
   capturePoints: CapturePoint[] = [];
   checkpoints: Checkpoint[] = [];
   titan: Titan | null = null;
@@ -80,6 +92,11 @@ export class Game {
   /** Scene objects that survive level changes (camera, lights). */
   private persistentObjects = new Set<THREE.Object3D>();
   private ui: GameUI;
+  private graphics!: GraphicsPipeline;
+  private sunDirection = new THREE.Vector3(-40, 60, -50).normalize();
+  /** Health seen last frame, to trigger hit feedback when it drops. */
+  private lastPilotHealth = 100;
+  private lastTitanHealth = 0;
 
   private capturedTime = 0;
   private checkpointProgress = 0;
@@ -138,7 +155,8 @@ export class Game {
     this.initScene();
     this.ui.init(
       () => { if (this.state === GameState.PLAYING || this.state === GameState.PAUSED) this.togglePause(); },
-      () => { if (this.state === GameState.PLAYING) this.callTitan(); }
+      () => { if (this.state === GameState.PLAYING) this.callTitan(); },
+      (quality: GraphicsQuality) => this.setGraphicsQuality(quality)
     );
 
     // Clicking the canvas re-captures the mouse if pointer lock was lost
@@ -169,40 +187,33 @@ export class Game {
     this.camera.position.set(0, 2, 0);
     this.scene.add(this.camera);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Anti-aliasing is done in the post-processing chain (MSAA render target or FXAA)
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.4; // Boosted for simulation look
+    this.renderer.toneMappingExposure = 0.95;
     this.gameContainer.appendChild(this.renderer.domElement);
 
-    // Sky dome
-    this.createSkyDome();
+    this.graphics = new GraphicsPipeline(this.renderer, this.scene, this.camera, getGraphicsQuality());
 
-    // Hemisphere light: bright sky blue and clear neutral bounce
-    const hemiLight = new THREE.HemisphereLight(0xbadcf5, 0xffffff, 0.9);
+    // Sky dome, also used as the image-based lighting environment
+    const sky = this.createSkyDome();
+    this.graphics.setEnvironmentFromEquirect(sky, 0.4);
+
+    // Soft sky fill. Most ambient light now comes from the sky environment map.
+    const hemiLight = new THREE.HemisphereLight(0xbadcf5, 0xe8eef2, 0.45);
     this.scene.add(hemiLight);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.2); // Lower ambient for better shadows
-    this.scene.add(ambientLight);
-
-    // Sun-like directional light — very bright, clear simulation sun
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 2.2); // Stronger directional for contrast
-    directionalLight.position.set(-40, 60, -50);
+    // Sun: casts the shadows. Its shadow frustum follows the camera (see GraphicsPipeline.updateSun)
+    const directionalLight = new THREE.DirectionalLight(0xfff4e6, 2.6);
+    directionalLight.position.copy(this.sunDirection).multiplyScalar(90);
     directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 2048;
-    directionalLight.shadow.mapSize.height = 2048;
-    directionalLight.shadow.camera.near = 10;
-    directionalLight.shadow.camera.far = 200;
-    directionalLight.shadow.camera.left = -50;
-    directionalLight.shadow.camera.right = 50;
-    directionalLight.shadow.camera.top = 50;
-    directionalLight.shadow.camera.bottom = -50;
     this.scene.add(directionalLight);
+    this.graphics.setSun(directionalLight);
 
-    this.persistentObjects = new Set<THREE.Object3D>([this.camera, hemiLight, ambientLight, directionalLight]);
+    this.persistentObjects = new Set<THREE.Object3D>([this.camera, hemiLight, directionalLight, directionalLight.target]);
 
     this.world = new CANNON.World();
     this.world.gravity.set(0, 0, 0);
@@ -210,11 +221,13 @@ export class Game {
     window.addEventListener('resize', () => this.onWindowResize());
   }
 
-  private createSkyDome() {
+  private createSkyDome(): THREE.Texture {
     const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 512;
+    canvas.width = 2048;
+    canvas.height = 1024;
     const ctx = canvas.getContext('2d')!;
+    // Authored in 1024x512 units; scaled up for a sharper background
+    ctx.scale(2, 2);
 
     // Gradient: bright cyan/teal horizon → light blue → white zenith
     const grad = ctx.createLinearGradient(0, 512, 0, 0);
@@ -226,14 +239,18 @@ export class Game {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 1024, 512);
 
-    // Subtle digital grid in the sky
-    ctx.strokeStyle = 'rgba(0, 255, 204, 0.15)';
+    // Subtle digital grid in the sky, fading out overhead where equirect lines bunch into arcs
+    const gridFade = ctx.createLinearGradient(0, 512, 0, 0);
+    gridFade.addColorStop(0.5, 'rgba(0, 255, 204, 0.14)');
+    gridFade.addColorStop(0.72, 'rgba(0, 255, 204, 0.04)');
+    gridFade.addColorStop(0.85, 'rgba(0, 255, 204, 0)');
+    ctx.strokeStyle = gridFade;
     ctx.lineWidth = 1;
     const gridSpacing = 64;
     for (let x = 0; x <= 1024; x += gridSpacing) {
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 512); ctx.stroke();
     }
-    for (let y = 0; y <= 512; y += gridSpacing) {
+    for (let y = 128; y <= 512; y += gridSpacing) {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(1024, y); ctx.stroke();
     }
 
@@ -256,9 +273,38 @@ export class Game {
       ctx.fill();
     }
 
+    // Sun glow, placed where the directional light actually comes from (equirectangular mapping)
+    const sun = this.sunDirection;
+    const u = Math.atan2(sun.z, sun.x) / (Math.PI * 2) + 0.5;
+    const v = Math.asin(THREE.MathUtils.clamp(sun.y, -1, 1)) / Math.PI + 0.5;
+    const sunX = u * 1024;
+    const sunY = (1 - v) * 512;
+    const stretch = 1 / Math.max(0.2, Math.cos(Math.asin(sun.y))); // equirect widens towards the poles
+    ctx.save();
+    ctx.translate(sunX, sunY);
+    ctx.scale(stretch, 1);
+    const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, 90);
+    halo.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    halo.addColorStop(0.08, 'rgba(255, 252, 240, 1)');
+    halo.addColorStop(0.25, 'rgba(255, 244, 220, 0.55)');
+    halo.addColorStop(1, 'rgba(255, 240, 220, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(0, 0, 90, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
     const texture = new THREE.CanvasTexture(canvas);
     texture.mapping = THREE.EquirectangularReflectionMapping;
+    texture.colorSpace = THREE.SRGBColorSpace;
     this.scene.background = texture;
+    return texture;
+  }
+
+  private setGraphicsQuality(quality: GraphicsQuality): void {
+    if (quality === this.graphics.getQuality()) return;
+    setGraphicsQuality(quality);
+    this.graphics.setQuality(quality);
   }
 
   callTitan(): void {
@@ -398,6 +444,8 @@ export class Game {
     this.activePickupHoldTime = 0;
 
     this.teardownLevel();
+    this.lastPilotHealth = 100;
+    this.lastTitanHealth = 0;
 
     createLevel(this.scene, this.world, this.currentLevel);
 
@@ -446,6 +494,8 @@ export class Game {
     this.targets = [];
     this.enemies.forEach((enemy) => enemy.dispose());
     this.enemies = [];
+    this.worldEffects?.disposeAll();
+    this.worldEffects = null;
     this.capturePoints = [];
     this.checkpoints = [];
     this.weaponPickups = [];
@@ -460,7 +510,7 @@ export class Game {
     }
 
     for (const child of [...this.scene.children]) {
-      if (this.persistentObjects.has(child)) continue;
+      if (this.persistentObjects.has(child) || this.graphics.getPersistentObjects().includes(child)) continue;
       this.scene.remove(child);
       disposeObject3D(child);
     }
@@ -573,7 +623,7 @@ export class Game {
     });
   }
 
-  /** Starting enemy positions per level type (feet on the ground, y = 0). */
+  /** Starting grunt positions per level type (feet on the ground, y = 0). */
   private getEnemySpawnPositions(type: LevelType): THREE.Vector3[] {
     switch (type) {
       case LevelType.SURVIVAL:
@@ -596,20 +646,53 @@ export class Game {
     }
   }
 
+  /** Dormant tick positions per level type. */
+  private getTickSpawnPositions(type: LevelType): THREE.Vector3[] {
+    switch (type) {
+      case LevelType.SURVIVAL:
+        return [new THREE.Vector3(-14, 0, -40), new THREE.Vector3(14, 0, -40), new THREE.Vector3(-6, 0, -48), new THREE.Vector3(6, 0, -48)];
+      case LevelType.CAPTURE:
+        return [new THREE.Vector3(-4, 0, 36), new THREE.Vector3(4, 0, 36)];
+      case LevelType.RACE:
+        return [new THREE.Vector3(8, 0, -30), new THREE.Vector3(-8, 0, -52), new THREE.Vector3(4, 0, -75)];
+      default:
+        return [];
+    }
+  }
+
+  private addHostile(hostile: Hostile): void {
+    this.enemies.push(hostile);
+  }
+
+  private spawnGrunt(position: THREE.Vector3, squadId: number, aggressive = true, difficulty = 0.3 + Math.random() * 0.4): void {
+    this.addHostile(new Grunt(this.scene, position, { health: 50, difficulty, squadId, aggressive }));
+  }
+
   private setupEnemies() {
     const level = this.currentLevel!;
+    this.reapersSpawned = 0;
+
+    // Grunts in squads of up to three
     const positions = this.getEnemySpawnPositions(level.type);
+    let squad = this.nextSquadId++;
     for (let i = 0; i < level.enemyCount && positions.length > 0; i++) {
-      const position = positions[i % positions.length].clone();
-      const diff = 0.3 + Math.random() * 0.4; // 0.3-0.7
-      this.enemies.push(new Enemy(this.scene, this.world, position, {
-        health: 50,
-        speed: 1.5,
-        aggressive: level.type !== LevelType.RACE,
-        attackCooldown: 2,
-        difficulty: diff,
-      }));
+      if (i > 0 && i % 3 === 0) squad = this.nextSquadId++;
+      this.spawnGrunt(positions[i % positions.length].clone(), squad, level.type !== LevelType.RACE);
     }
+
+    const ticks = this.getTickSpawnPositions(level.type);
+    for (let i = 0; i < (level.tickCount ?? 0) && ticks.length > 0; i++) {
+      this.addHostile(new Tick(this.scene, ticks[i % ticks.length].clone()));
+    }
+
+    for (let i = 0; i < (level.reaperCount ?? 0); i++) this.spawnReaper();
+  }
+
+  private spawnReaper(): void {
+    // Far end of the survival arena, alternating flanks (the central corridors split the arena)
+    const x = this.reapersSpawned % 2 === 0 ? 12 : -12;
+    this.addHostile(new Reaper(this.scene, new THREE.Vector3(x, 0, -50)));
+    this.reapersSpawned++;
   }
 
   update(delta: number) {
@@ -619,13 +702,14 @@ export class Game {
     this.world.step(1 / 60, delta, 4);
 
     this.player.update(delta, this.targets, this.enemies);
+    this.worldEffects?.update(delta);
     this.targets.forEach(target => target.update(delta, this.camera.position));
 
     // Update level-specific visuals (like pulsing neon strips)
     updateLevelVisuals(performance.now() * 0.001);
 
     // Update radar with enemy positions
-    this.player.updateRadar(this.enemies.map(e => ({ position: e.group.position })));
+    this.player.updateRadar(this.enemies.filter((e) => !e.isDead()).map((e) => ({ position: e.group.position })));
     this.player.renderRadar();
 
     this.updateObjectives(delta);
@@ -963,38 +1047,51 @@ export class Game {
         break;
 
       case LevelType.SURVIVAL: {
-        // Reinforcements arrive faster the longer you survive
-        const maxEnemies = this.currentLevel!.enemyCount * 2;
-        const spawnInterval = Math.max(3, 8 - this.stats.time / 10);
+        // Reinforcements arrive faster the longer you survive, escalating from grunts to ticks to reapers
+        const level = this.currentLevel!;
+        const alive = this.enemies.filter((e) => !e.isDead());
+        const maxAlive = level.enemyCount * 2 + 4;
+        const spawnInterval = Math.max(3.5, 8 - this.stats.time / 10);
         this.survivalSpawnTimer += delta;
         if (this.survivalSpawnTimer >= spawnInterval) {
           this.survivalSpawnTimer = 0;
-          if (this.enemies.length < maxEnemies) this.spawnEnemy();
+          if (alive.length < maxAlive) this.spawnWave(alive);
         }
         break;
       }
     }
   }
 
-  private spawnEnemy() {
+  private spawnWave(alive: Hostile[]): void {
+    const t = this.stats.time;
+    const reapersAlive = alive.filter((e) => e.kind === 'reaper').length;
+    const reaperBudget = (this.currentLevel!.reaperCount ?? 0) + Math.floor(Math.max(0, t - 30) / 40) + (t > 30 ? 1 : 0);
+    if (reapersAlive === 0 && this.reapersSpawned < reaperBudget) {
+      this.spawnReaper();
+      return;
+    }
+
     // Arena corners, inside the survival walls
-    const spawnPoints = [
-      new THREE.Vector3(15, 0, -50),
-      new THREE.Vector3(-15, 0, -50),
-      new THREE.Vector3(15, 0, -5),
-      new THREE.Vector3(-15, 0, -5)
+    const corners = [
+      new THREE.Vector3(15, 0, -50), new THREE.Vector3(-15, 0, -50),
+      new THREE.Vector3(15, 0, -5), new THREE.Vector3(-15, 0, -5),
     ];
+    const corner = corners[Math.floor(Math.random() * corners.length)];
+    const jitter = () => corner.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0, (Math.random() - 0.5) * 3));
 
-    const point = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
-
-    const diff = 0.3 + Math.random() * 0.5;
-    this.enemies.push(new Enemy(this.scene, this.world, point.clone(), {
-      health: 50,
-      speed: 1.5 + Math.random() * 1.0,
-      aggressive: true,
-      attackCooldown: 2 + Math.random() * 2,
-      difficulty: diff,
-    }));
+    if (t > 18 && Math.random() < 0.4) {
+      // Tick pack: they wake immediately and rush in
+      for (let i = 0; i < 3; i++) {
+        const tick = new Tick(this.scene, jitter());
+        tick.takeDamage(0);
+        this.addHostile(tick);
+      }
+    } else {
+      // Grunt fireteam, tougher as time goes on
+      const squad = this.nextSquadId++;
+      const difficulty = Math.min(0.9, 0.35 + t / 150);
+      for (let i = 0; i < 2; i++) this.spawnGrunt(jitter(), squad, true, difficulty);
+    }
   }
 
   /** Opaque, raycastable level geometry (used for line-of-sight and bullet collision). */
@@ -1010,35 +1107,51 @@ export class Game {
 
   private updateEnemies(delta: number) {
     const playerPos = this.player.group.position;
-    const worldMeshes = this.getWorldMeshes();
-    const playerVel = this.player.getVelocity();
-    const hitbox = { center: playerPos.clone().add(new THREE.Vector3(0, 0.5, 0)), radius: PLAYER_HITBOX_RADIUS };
+    const hitbox = { center: playerPos.clone().add(new THREE.Vector3(0, PLAYER_HITBOX_HEIGHT, 0)), radius: PLAYER_HITBOX_RADIUS };
     const piloting = this.isPiloting();
     if (piloting && this.titan) {
       // Enemies engage the titan itself, which is a much bigger target than a pilot
       hitbox.center.copy(this.titan.group.position).add(new THREE.Vector3(0, 5, 0));
       hitbox.radius = 3;
     }
-    const aimPos = piloting ? hitbox.center : playerPos;
+    if (!this.worldEffects) this.worldEffects = new ImpactEffectsRenderer(this.scene);
+
+    const spawned: Hostile[] = [];
+    const ctx: HostileContext = {
+      delta,
+      target: hitbox.center,
+      targetVelocity: this.player.getVelocity(),
+      targetIsTitan: piloting,
+      hitbox,
+      worldMeshes: this.getWorldMeshes(),
+      hostiles: this.enemies,
+      effects: this.worldEffects,
+      spawn: (h) => spawned.push(h),
+    };
 
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const enemy = this.enemies[i];
 
-      // AI update: state machine, movement, shooting
-      const hits = enemy.update(delta, aimPos, worldMeshes, hitbox, playerVel);
-      for (const source of hits) {
-        if (piloting && this.titan) this.titan.takeDamage(ENEMY_BULLET_DAMAGE);
-        else this.player.takeDamage(ENEMY_BULLET_DAMAGE, source);
+      // AI update: state machine, movement, attacks
+      for (const hit of enemy.update(ctx)) {
+        if (piloting && this.titan) this.titan.takeDamage(hit.damage);
+        else this.player.takeDamage(hit.damage, hit.source);
       }
 
-      // Check enemy death
-      if (enemy.health <= 0) {
+      // Score each kill exactly once, whoever caused it (player, titan, a tick blast)
+      if (enemy.isDead() && !this.scoredKills.has(enemy)) {
+        this.scoredKills.add(enemy);
+        if (enemy.scoreValue > 0) {
+          this.addScore(enemy.scoreValue);
+          this.stats.kills++;
+        }
+      }
+      if (enemy.isFinished()) {
         enemy.dispose();
         this.enemies.splice(i, 1);
-        this.addScore(100);
-        this.stats.kills++;
       }
     }
+    this.enemies.push(...spawned);
   }
 
   addScore(amount: number) {
@@ -1137,7 +1250,7 @@ export class Game {
       capturedTime: this.capturedTime,
       checkpoints: this.checkpoints,
       checkpointProgress: this.checkpointProgress,
-      enemyCount: this.enemies.length,
+      enemyCount: this.enemies.filter((e) => !e.isDead()).length,
       destroyedTargets: this.countDestroyedTargets(),
       showSniperScope: this.player.shouldShowSniperScope(),
       weapon: this.player.getWeaponHUDData(),
@@ -1184,7 +1297,24 @@ export class Game {
   onWindowResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.graphics.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  /** Screen feedback (edge flash, desaturation, cockpit tint) driven by pilot/titan health. */
+  private updateScreenFeedback(): void {
+    const titan = this.titan;
+    const piloting = !!titan && titan.state === TitanState.PILOTING;
+    this.graphics.setTitanView(piloting);
+
+    const pilotHealth = this.player.health;
+    if (pilotHealth < this.lastPilotHealth) this.graphics.registerDamage(this.lastPilotHealth - pilotHealth);
+    this.lastPilotHealth = pilotHealth;
+
+    const titanHealth = titan ? titan.getHealth() + titan.getShield() : 0;
+    if (piloting && titanHealth < this.lastTitanHealth) this.graphics.registerDamage((this.lastTitanHealth - titanHealth) * 0.5);
+    this.lastTitanHealth = titanHealth;
+
+    this.graphics.setHealthFraction(piloting && titan ? titan.getHealth() / 100 : pilotHealth / 100);
   }
 
   animate() {
@@ -1192,11 +1322,14 @@ export class Game {
     const delta = Math.min(this.clock.getDelta(), 0.05);
     if (this.state === GameState.PLAYING) {
       this.update(delta);
+      this.updateScreenFeedback();
+      this.graphics.update(delta, this.camera.position);
     } else {
       this.ui.updateMenuNavigation(this.state);
+      this.graphics.update(0, this.camera.position);
     }
 
-    this.renderer.render(this.scene, this.camera);
+    this.graphics.render();
     requestAnimationFrame(() => this.animate());
   }
 }

@@ -27,12 +27,19 @@ src/
 ├── level.ts       # Map geometry builder (createLevel)
 ├── levels.ts      # Level data: LevelType enum, Level interface, LEVELS array
 ├── types.ts       # Shared types: GameState enum, GameStats, Damageable, HUD data
-├── titan.ts       # Titan entity logic
-├── enemy.ts       # Enemy entity logic
+├── titan.ts       # Titan entity logic (states, piloting, weapons)
+├── titanModel.ts  # Titan geometry, rig and two-bone leg IK
+├── hostile.ts     # Hostile interface/context shared by all AI enemies + steering/cover helpers
+├── grunt.ts       # Grunt: squad rifleman AI (cover, peek, reload, flee titans)
+├── tick.ts        # Tick: suicide drone AI + model
+├── reaper.ts      # Reaper: bipedal robot AI (rockets, stomp, tick launcher) + model
 ├── target.ts      # Destructible target entities
 ├── weapons.ts     # Weapon definitions, cloneWeapon, WeaponManager
 ├── ballistics.ts  # Projectile simulation
 ├── collision.ts   # Pure collision/damage helpers, disposeObject3D
+├── graphics.ts    # Render pipeline: post-processing, sun shadows, IBL, flash lights
+├── graphicsSettings.ts # Quality presets (low/medium/high/ultra) + persistence
+├── geometryUtils.ts    # bevelBox, placedBox, mergeAndDispose
 ├── effects.ts     # Impact/explosion particle effects
 ├── reticle.ts     # Crosshair canvas
 ├── radar.ts       # Radar / damage-direction canvas
@@ -47,11 +54,19 @@ src/
 - `GameUI` is instantiated in `Game` constructor as `this.ui`. All DOM manipulation goes through `GameUI` — do not add DOM code to `game.ts`.
 - `GameUI.init()` accepts callbacks (`onTogglePause`, `onCallTitan`) rather than holding a reference to `Game`, keeping `ui.ts` decoupled.
 - Physics body velocity is set directly on `body.velocity` (Cannon-es Vector3), not via forces, for responsive player movement.
+- Pilot body: a 0.4 m sphere (`PLAYER_RADIUS`) at the feet plus a 0.3 m head sphere 1 m above it; grounded movement snaps the sphere onto the floor. The camera sits `eyeOffset` above the body centre (1.3 m standing, ≈1.7 m eye height; 0.75 m crouched/sliding). Probes that look for walls (mantle) must cover chest/head height, not just the foot sphere.
 - Wall run: `wallNormal` is set by `checkWall()` raycasts (left/right). Movement is projected onto the wall tangent plane to prevent camera-look direction from pulling the player off the wall.
 - **Lifecycle**: every level restart goes through `Game.teardownLevel()`. Anything that registers DOM listeners, appends DOM elements or allocates GPU resources must expose `dispose()`/`destroy()` and be called from there. Register listeners with an `AbortController` signal so they can be removed in one call (see `Player`).
 - Weapon constants (`R201_WEAPON`, ...) are shared templates — never mutate them. `WeaponManager` stores copies via `cloneWeapon()`.
 - Fast projectiles must be hit-tested along the segment travelled this frame (`segmentIntersectsSphere`, `Player.findSegmentHit`), not just at their new position, or they tunnel through targets.
 - Game time (`stats.time`) accumulates simulated `delta`, so pausing doesn't count against level time limits.
+- **Rendering**: never call `renderer.render()` directly — `GraphicsPipeline.render()` runs the post-processing chain (MSAA/FXAA, bloom, GTAO on ultra, colour grade, tone mapping). Tone mapping and sRGB conversion happen in the final `OutputPass`.
+- **Glow**: bloom only picks up HDR values (threshold ≈ 2.4 luminance, above sunlit white walls). Make something glow with an HDR colour, e.g. `new THREE.Color(hex).multiplyScalar(4)` on a `MeshBasicMaterial`, or a high `emissiveIntensity`.
+- **Canvas textures** that carry colour must set `texture.colorSpace = THREE.SRGBColorSpace`.
+- **Dynamic lights**: use `flashLight()` from `graphics.ts` for muzzle flashes/explosions. It uses a fixed pool, so the scene's light count never changes (which would recompile every shader).
+- **Geometry**: use `bevelBox()` instead of `BoxGeometry` for visible hard-surface parts. Decorative detail on level blocks is added as *children* (merged per material via `mergeAndDispose`) so gameplay raycasts, which only test top-level scene meshes, and physics are unaffected.
+- **Enemies** implement `Hostile` (`hostile.ts`). `Game.updateEnemies()` builds one `HostileContext` per frame (target, hitbox, world meshes, shared `worldEffects`, `spawn`); hostiles return `HostileHit`s and never touch the player/titan directly, so damage routes to whichever the player is in. Dead hostiles stay in `Game.enemies` until `isFinished()` (death animations); kills are scored once via `scoredKills`. New enemy types: implement `Hostile`, add spawns in `Game`.
+- **Per-frame allocation**: projectiles and particles share cached geometries/materials and only update transforms. Don't create geometries or materials per bullet/particle, and don't dispose shared ones in `disposeBullet`.
 
 ## Gamepad Support
 

@@ -2,11 +2,26 @@
 
 A browser-based 3D first-person shooter inspired by Titanfall, built with Three.js and the Cannon-es physics engine.
 
+![Pilot vs the Colossus](docs/images/boss.jpg)
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Phase two: the Colossus rakes the arena with its chest beam](docs/images/boss-beam.jpg) | ![Titan cockpit: XO-16 against a reaper and grunts](docs/images/titan.jpg) |
+| **Boss fight, phase two**: the Colossus's sweeping chest beam | **Titan cockpit**: the XO-16 against a reaper and grunts |
+| ![A stalker pack advances under turret fire while a laser drone charges](docs/images/combat.jpg) | ![Main menu](docs/images/menu.jpg) |
+| **Machine Yard**: a stalker pack advances while a laser drone charges its shot | **Main menu** |
+
+![Scale lineup of every actor, from the 0.8 m tick to the 17.5 m Colossus](docs/images/lineup.jpg)
+
+*Every actor at in-game scale: tick 0.8 m, drones, grunt/pilot 1.9 m, stalker 2.1 m, reaper 2.9 m, titan 6.9 m, Colossus 17.5 m.*
+
 ## Demo
 
 [![Watch the demo](https://img.youtube.com/vi/l3LYOUOZzCk/0.jpg)](https://www.youtube.com/watch?v=l3LYOUOZzCk)
 
-Click the image above to watch a gameplay demo on YouTube.
+Click the image above to watch a gameplay demo on YouTube (recorded on an earlier build, before the rendering overhaul, the new enemies and the boss).
 
 ## Features
 

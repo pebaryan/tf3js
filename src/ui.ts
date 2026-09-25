@@ -1699,9 +1699,10 @@ export class GameUI {
     if (!this.bossBar) {
       const bar = document.createElement('div');
       bar.id = 'boss-bar';
-      bar.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);width:min(62vw,760px);z-index:90;pointer-events:none;font-family:Georgia,"Times New Roman",serif;';
+      // Bottom centre, souls-style, between the vitals (left) and titan meter (right)
+      bar.style.cssText = 'position:fixed;bottom:56px;left:50%;transform:translateX(-50%);width:min(44vw,640px);z-index:90;pointer-events:none;font-family:Georgia,"Times New Roman",serif;';
       const name = document.createElement('div');
-      name.style.cssText = 'color:#e8d6a8;font-size:15px;letter-spacing:3px;margin-bottom:5px;text-shadow:0 0 6px rgba(0,0,0,0.9);';
+      name.style.cssText = 'color:#f4e6c0;font-size:16px;font-weight:bold;letter-spacing:3px;margin-bottom:5px;text-shadow:0 0 4px #000,0 0 10px rgba(0,0,0,0.9);';
       const track = document.createElement('div');
       track.style.cssText = 'position:relative;height:12px;background:rgba(10,8,8,0.75);border:1px solid rgba(232,214,168,0.45);box-shadow:0 0 12px rgba(0,0,0,0.6);';
       const chip = document.createElement('div');

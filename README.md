@@ -17,7 +17,7 @@ Click the image above to watch a gameplay demo on YouTube.
 - **Enemies**:
   - **Grunts** fight in squads: whoever spots you radios the rest; they take cover behind real geometry, peek out to fire bursts, reload, and run from titans
   - **Ticks** lie dormant until they see you, then scuttle in on a weave, arm with an accelerating beep and explode (shooting one nearby still hurts — and their blasts hurt other enemies)
-  - **Reapers** are 5 m bipedal machines that fire homing rocket salvos, stomp anything underfoot and launch ticks from their backs
+  - **Reapers** are 3 m bipedal machines that fire homing rocket salvos, stomp anything underfoot and launch ticks from their backs
 - **Pilot health regenerates** after a few seconds out of fire
 - **Seven missions** across training, capture, race and survival modes
 - **Rebindable keys** and full **gamepad** support (menus and gameplay), with selectable aim response curves

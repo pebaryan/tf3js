@@ -10,7 +10,7 @@ import {
 } from './hostile';
 
 /*
- * Reaper: a ~5 m bipedal war machine with digitigrade legs. It advances on the
+ * Reaper: a ~3 m bipedal war machine with digitigrade legs. It advances on the
  * pilot, fires homing rocket salvos from its side pods, stomps anything that
  * gets underfoot and launches ticks from a hatch on its back. On death it
  * collapses and blows up.
@@ -26,14 +26,20 @@ export enum ReaperState {
   DEAD,
 }
 
-const HIP_HEIGHT = 3.1;
-const WALK_SPEED = 2.8;
+/**
+ * The model is authored at ~6.2 m and scaled down uniformly, so it stands about
+ * 3 m tall: a head and a half taller than a pilot, a quarter of a titan.
+ * Constants below marked "model units" are pre-scale; world distances are not.
+ */
+export const REAPER_SCALE = 0.48;
+const HIP_HEIGHT = 3.1; // model units
+const WALK_SPEED = 3.2;
 const TURN_RATE = 1.4;
 const DETECTION_RANGE = 55;
-const PREFERRED_RANGE = 14;
-const STOMP_RANGE = 5;
-const STOMP_DAMAGE = 45;
-const STOMP_RADIUS = 5;
+const PREFERRED_RANGE = 12;
+const STOMP_RANGE = 2.6;
+const STOMP_DAMAGE = 40;
+const STOMP_RADIUS = 3;
 const ROCKETS_PER_SALVO = 6;
 const ROCKET_SPEED = 20;
 const ROCKET_MAX_SPEED = 34;
@@ -109,6 +115,7 @@ export class Reaper implements Hostile {
     this.group = new THREE.Group();
     this.group.position.copy(position);
     this.group.rotation.y = Math.random() * Math.PI * 2;
+    this.group.scale.setScalar(REAPER_SCALE);
 
     this.body = new THREE.Group();
     this.body.position.y = HIP_HEIGHT;
@@ -236,10 +243,11 @@ export class Reaper implements Hostile {
 
   checkBulletHit(p: THREE.Vector3): boolean {
     if (this.isDead()) return false;
+    // Work in model units so the hit volumes match the (scaled) mesh
     const c = this.group.position;
-    const dx = p.x - c.x;
-    const dz = p.z - c.z;
-    const dy = p.y - c.y;
+    const dx = (p.x - c.x) / REAPER_SCALE;
+    const dz = (p.z - c.z) / REAPER_SCALE;
+    const dy = (p.y - c.y) / REAPER_SCALE;
     const flat = dx * dx + dz * dz;
     // Head pod (sphere) or the legs/pelvis column below it
     const headY = this.body.position.y + 1.15; // head pod centre: body + head offset + pod offset
@@ -273,7 +281,7 @@ export class Reaper implements Hostile {
 
     const pos = this.group.position;
     const flatDist = Math.hypot(ctx.target.x - pos.x, ctx.target.z - pos.z);
-    const eye = pos.clone().setY(pos.y + HIP_HEIGHT + 1.4);
+    const eye = pos.clone().setY(pos.y + (HIP_HEIGHT + 1.4) * REAPER_SCALE);
     const canSee = flatDist < DETECTION_RANGE && hasLineOfSight(eye, ctx.target, ctx.worldMeshes);
     if (canSee) this.lastKnownTarget = ctx.target.clone();
     this.walking = false;
@@ -396,9 +404,10 @@ export class Reaper implements Hostile {
     const facing = Math.abs(Math.atan2(Math.sin(yawTowards(this.group.position, point) - yaw), Math.cos(yawTowards(this.group.position, point) - yaw)));
     if (facing > 0.8) return;
     const step = speed * dt;
-    const ok = tryMoveHorizontal(this.group, Math.sin(yaw) * step, Math.cos(yaw) * step, ctx.worldMeshes, 1.1, [0.6, 2.2]);
+    const ok = tryMoveHorizontal(this.group, Math.sin(yaw) * step, Math.cos(yaw) * step, ctx.worldMeshes, 1.1 * REAPER_SCALE, [0.6 * REAPER_SCALE, 2.2 * REAPER_SCALE]);
     this.walking = ok;
-    if (ok) this.gait += dt * speed * 1.6;
+    // Shorter legs take quicker strides for the same ground speed
+    if (ok) this.gait += (dt * speed * 1.6) / REAPER_SCALE;
   }
 
   private fireRocket(): void {
@@ -417,6 +426,7 @@ export class Reaper implements Hostile {
     const flame = new THREE.Mesh(rocketFlameGeo, rocketFlameMat);
     for (const m of [body, nose, flame]) m.userData.ignoreRaycast = true;
     mesh.add(body, nose, flame);
+    mesh.scale.setScalar(REAPER_SCALE * 1.4);
     mesh.position.copy(start);
     mesh.userData.ignoreRaycast = true;
     this.scene.add(mesh);
@@ -479,7 +489,8 @@ export class Reaper implements Hostile {
     ctx.effects.spawnExplosion(foot.clone().setY(0.2), { ...FRAG_EXPLOSION_CONFIG, coreColor: 0xbba888, debrisColor: 0x887766, shockwaveColor: 0xddccaa });
     soundManager.playSound('explosion', 0.5);
     const d = Math.max(0, Math.hypot(ctx.hitbox.center.x - foot.x, ctx.hitbox.center.z - foot.z) - ctx.hitbox.radius);
-    if (ctx.hitbox.center.y < 3.5 + ctx.hitbox.radius) {
+    // Only things near the ground get stomped (not a titan's torso)
+    if (ctx.hitbox.center.y < 2 + ctx.hitbox.radius) {
       const dmg = splashDamage(STOMP_DAMAGE, d, STOMP_RADIUS);
       if (dmg > 0) hits.push({ damage: dmg, source: foot });
     }
@@ -566,11 +577,11 @@ export class Reaper implements Hostile {
     if (this.exploded) return;
     this.exploded = true;
     const center = this.head.getWorldPosition(new THREE.Vector3());
-    ctx.effects.spawnExplosion(center, { ...FRAG_EXPLOSION_CONFIG, coreRadius: 1.4, debrisCount: 40, debrisSpeedMax: 30 });
+    ctx.effects.spawnExplosion(center, { ...FRAG_EXPLOSION_CONFIG, coreRadius: 1.0, debrisCount: 32, debrisSpeedMax: 26 });
     flashLight(center, 0xff6622, 120, 25, 0.6);
     soundManager.playSound('explosion', 0.9);
     const d = Math.max(0, center.distanceTo(ctx.hitbox.center) - ctx.hitbox.radius);
-    const dmg = splashDamage(50, d, 7);
+    const dmg = splashDamage(45, d, 5);
     if (dmg > 0) hits.push({ damage: dmg, source: center });
     this.group.visible = false;
   }

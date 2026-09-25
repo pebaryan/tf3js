@@ -59,3 +59,15 @@ export interface Damageable {
   checkBulletHit(bulletPos: THREE.Vector3): boolean;
   takeDamage(amount: number, hitPoint?: THREE.Vector3): void;
 }
+
+/** Boss health bar data (the Colossus fight). */
+export interface BossStatus {
+  name: string;
+  health: number;
+  maxHealth: number;
+  stagger: number;
+  staggerMax: number;
+  phase: 1 | 2;
+  awake: boolean;
+  staggered: boolean;
+}

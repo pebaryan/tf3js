@@ -11,7 +11,7 @@ Click the image above to watch a gameplay demo on YouTube.
 ## Features
 
 - **Pilot movement**: sprint, slide, double jump, wall-run, wall-jump, mantle, bunny-hop and a grappling hook
-- **Titans**: fill your meter, call in a Titan, embark, dash and fight with the XO-16 chaingun
+- **Titans** (~7 m, about twice a reaper): fill your meter, call in a Titan, embark, dash and fight with the XO-16 chaingun
 - **10 pilot weapons** with distinct ballistics (bullet drop, shotgun spreads, explosive EPG rounds) and per-weapon reticles
 - **Attachments**: optics, extended/quick-reload magazines, stabilizer and suppressor
 - **Enemies**:
@@ -23,7 +23,8 @@ Click the image above to watch a gameplay demo on YouTube.
   - **Cloak drones** are unarmed: they shadow grunts and stalkers and cloak everything around them (tethers show who's hidden). Kill the drone and the squad reappears
   - **Light turrets** sweep their arc, lock on with a laser sight and shred pilots with fast bursts; **anti-titan turrets** traverse slowly and fire heavy explosive shells built to kill titans
 - **Pilot health regenerates** after a few seconds out of fire
-- **Eight missions** across training, capture, race and survival modes
+- **Boss fight — the Colossus**: an 18 m war machine fought souls-style. Every attack has a readable wind-up and a recovery window to punish: arm sweeps, an overhead slam that sends out a shockwave (jump it on foot, dash through it in a titan — the dash has invulnerability frames), stomps if you hide under it, and mortar barrages with ground markers. Its armour shrugs off most fire; the back reactor, knee actuators and head are weak points that build stagger — break its stance and it drops to one knee. At half health it roars into phase two: faster, with a sweeping chest beam and a leap slam
+- **Nine missions** across training, capture, race, survival and boss modes
 - **Rebindable keys** and full **gamepad** support (menus and gameplay), with selectable aim response curves
 - **Modern rendering**: HDR post-processing with bloom, MSAA/FXAA, ground-truth ambient occlusion (Ultra), image-based lighting from the sky, camera-following soft shadows, dynamic muzzle-flash/explosion lights and hit-feedback colour grading
 - **Graphics quality presets** (Low / Medium / High / Ultra) in **Configurations**
@@ -66,6 +67,7 @@ You can carry two weapons. Picking one up fills a free slot, or swaps it for the
 | 6 | Survival: Last Stand | Survive 60 seconds against escalating waves (grunts, then ticks, then reapers) |
 | 7 | Survival: Iron Tide | Survive 90 seconds against reapers, ticks and grunt squads |
 | 8 | Survival: Machine Yard | Survive 100 seconds against stalker packs, laser and cloak drones, and a turret line with an anti-titan gun |
+| 9 | Boss: The Iron Sovereign | Destroy the Colossus in its arena |
 
 ## Getting Started
 
@@ -106,7 +108,7 @@ src/
 ├── player.ts        # Pilot controller: input, shooting, grapple, grenades, viewmodel
 ├── movement.ts      # Pilot movement physics (slide, wall-run, mantle, ...)
 ├── titan.ts         # Titan entity: drop-in, embark/exit, piloting, chaingun
-├── titanModel.ts    # Titan model, rig and leg IK
+├── titanModel.ts    # Titan model, rig and leg IK (modelled at 11.2 m, scaled to ~7 m by TITAN_SCALE)
 ├── hostile.ts       # Shared enemy interface, steering and cover helpers
 ├── grunt.ts         # Grunt squad AI and model
 ├── tick.ts          # Tick (frag drone) AI and model
@@ -115,6 +117,8 @@ src/
 ├── drone.ts         # Laser and cloak drones
 ├── turret.ts        # Light and anti-titan turrets
 ├── hostileWeapons.ts # Projectile gun shared by grunts, stalkers and turrets
+├── colossus.ts      # Colossus boss: model, attacks, weak points, stagger, phases
+├── colossusLogic.ts # Boss leg IK, pose keyframes, attack selection (pure, tested)
 ├── target.ts        # Training targets
 ├── weapons.ts       # Weapon/attachment definitions and WeaponManager
 ├── ballistics.ts    # Projectile simulation and trails

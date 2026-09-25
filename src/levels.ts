@@ -2,7 +2,8 @@ export enum LevelType {
   TRAINING = 'training',
   CAPTURE = 'capture',
   RACE = 'race',
-  SURVIVAL = 'survival'
+  SURVIVAL = 'survival',
+  BOSS = 'boss'
 }
 
 export interface Level {
@@ -143,5 +144,17 @@ export const LEVELS: Level[] = [
     titanTurretCount: 1,
     timeLimit: 100,
     requiredScore: 3000
+  },
+  {
+    id: 9,
+    name: 'Boss: The Iron Sovereign',
+    type: LevelType.BOSS,
+    description: 'An 18 m Colossus guards the arena. Learn its tells, punish its recoveries, break its stance',
+    layout: 'arena',
+    objective: 'Destroy the Colossus',
+    targetCount: 0,
+    enemyCount: 0,
+    timeLimit: null,
+    requiredScore: 5000
   }
 ];

@@ -449,6 +449,62 @@ export class SoundManager {
       }
     }));
 
+    // roar: the Colossus — detuned low saws with a growl tremolo and a noise bed
+    this.soundMap.set('roar', await this.synth(2.2, (ctx) => {
+      const out = ctx.createGain();
+      out.gain.setValueAtTime(0.01, 0);
+      out.gain.linearRampToValueAtTime(0.9, 0.25);
+      out.gain.setValueAtTime(0.9, 1.4);
+      out.gain.exponentialRampToValueAtTime(0.01, 2.15);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 900;
+      lp.connect(out).connect(ctx.destination);
+      for (const f of [55, 58.5, 82]) {
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(f * 1.2, 0);
+        osc.frequency.exponentialRampToValueAtTime(f, 0.6);
+        osc.frequency.exponentialRampToValueAtTime(f * 0.8, 2.1);
+        const trem = ctx.createGain();
+        trem.gain.value = 0.35;
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = 23;
+        const depth = ctx.createGain();
+        depth.gain.value = 0.2;
+        lfo.connect(depth).connect(trem.gain);
+        osc.connect(trem).connect(lp);
+        osc.start(0); osc.stop(2.2);
+        lfo.start(0); lfo.stop(2.2);
+      }
+      const noise = this.noiseSource(ctx, 2.2);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = 400; bp.Q.value = 0.8;
+      const ng = ctx.createGain();
+      ng.gain.value = 0.35;
+      noise.connect(bp).connect(ng).connect(lp);
+      noise.start(0);
+    }));
+
+    // thud: massive footfall / ground impact
+    this.soundMap.set('thud', await this.synth(0.6, (ctx) => {
+      const osc = ctx.createOscillator();
+      osc.frequency.setValueAtTime(70, 0);
+      osc.frequency.exponentialRampToValueAtTime(28, 0.4);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(1.0, 0);
+      g.gain.exponentialRampToValueAtTime(0.01, 0.55);
+      osc.connect(g).connect(ctx.destination);
+      osc.start(0); osc.stop(0.6);
+      const noise = this.noiseSource(ctx, 0.25);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 300;
+      const g2 = ctx.createGain();
+      g2.gain.setValueAtTime(0.6, 0);
+      g2.gain.exponentialRampToValueAtTime(0.01, 0.2);
+      noise.connect(lp).connect(g2).connect(ctx.destination);
+      noise.start(0);
+    }));
+
     // cloak: airy shimmer when a cloak field engages
     this.soundMap.set('cloak', await this.synth(0.5, (ctx) => {
       const noise = this.noiseSource(ctx, 0.5);

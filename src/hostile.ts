@@ -11,7 +11,7 @@ import type { ImpactEffectsRenderer } from './effects';
  * the damage to the pilot or to the titan being piloted.
  */
 
-export type HostileKind = 'grunt' | 'tick' | 'reaper' | 'stalker' | 'drone' | 'turret';
+export type HostileKind = 'grunt' | 'tick' | 'reaper' | 'stalker' | 'drone' | 'turret' | 'colossus';
 
 export interface HostileHit {
   damage: number;
@@ -31,6 +31,12 @@ export interface HostileContext {
   targetVelocity: THREE.Vector3;
   /** True while the player is inside a titan (grunts run from titans). */
   targetIsTitan: boolean;
+  /** Target is standing on something (pilots can jump over ground shockwaves; titans can't). */
+  targetGrounded: boolean;
+  /** Target is mid-dodge (titan dash): invulnerable to telegraphed melee/shockwave attacks. */
+  targetDodging: boolean;
+  /** Shake the player's view (0..1), e.g. for heavy impacts nearby. */
+  shake: (intensity: number) => void;
   hitbox: TargetHitbox;
   /** Opaque level geometry for line-of-sight, movement and projectile collision. */
   worldMeshes: THREE.Mesh[];

@@ -13,6 +13,15 @@ import { bevelBox } from './geometryUtils';
  */
 
 /** Hip height above the ground when standing (body-space y of the leg pivots). */
+/**
+ * The rig is modelled ~11.2 m tall; the playable titan is scaled to ~7 m
+ * (about twice a reaper). Everything in this file is in model units; the
+ * Titan class applies the scale on a root node above the rig.
+ */
+export const TITAN_SCALE = 0.62;
+/** Model-unit height of the rig standing upright (top of the engine pack). */
+export const TITAN_MODEL_HEIGHT = 11.23;
+
 export const TITAN_HIP_HEIGHT = 5.0;
 /** Ankle joint height above the ground (half the foot's height). */
 export const TITAN_ANKLE_HEIGHT = 0.35;

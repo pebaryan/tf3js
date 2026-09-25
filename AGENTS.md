@@ -28,7 +28,7 @@ src/
 ├── levels.ts      # Level data: LevelType enum, Level interface, LEVELS array
 ├── types.ts       # Shared types: GameState enum, GameStats, Damageable, HUD data
 ├── titan.ts       # Titan entity logic (states, piloting, weapons)
-├── titanModel.ts  # Titan geometry, rig and two-bone leg IK
+├── titanModel.ts  # Titan geometry, rig and two-bone leg IK (model units; TITAN_SCALE shrinks it to ~7 m)
 ├── hostile.ts     # Hostile interface/context shared by all AI enemies + steering/cover helpers
 ├── grunt.ts       # Grunt: squad rifleman AI (cover, peek, reload, flee titans)
 ├── tick.ts        # Tick: suicide drone AI + model
@@ -37,6 +37,8 @@ src/
 ├── drone.ts       # Drones: laser (slow charged shot) and cloak (support) variants
 ├── turret.ts      # Turrets: light anti-personnel and heavy anti-titan
 ├── hostileWeapons.ts # HostileGun: projectile weapon shared by grunts, stalkers and turrets
+├── colossus.ts    # Colossus boss (18 m): model, telegraphed attacks, weak points, stagger, phase 2
+├── colossusLogic.ts # Pure boss logic: legIK, pose keyframes (samplePose), attack choice, damage zones
 ├── target.ts      # Destructible target entities
 ├── weapons.ts     # Weapon definitions, cloneWeapon, WeaponManager
 ├── ballistics.ts  # Projectile simulation
@@ -70,6 +72,9 @@ src/
 - **Dynamic lights**: use `flashLight()` from `graphics.ts` for muzzle flashes/explosions. It uses a fixed pool, so the scene's light count never changes (which would recompile every shader).
 - **Geometry**: use `bevelBox()` instead of `BoxGeometry` for visible hard-surface parts. Decorative detail on level blocks is added as *children* (merged per material via `mergeAndDispose`) so gameplay raycasts, which only test top-level scene meshes, and physics are unaffected.
 - **Enemies** implement `Hostile` (`hostile.ts`). `Game.updateEnemies()` builds one `HostileContext` per frame (target, hitbox, world meshes, shared `worldEffects`, `spawn`); hostiles return `HostileHit`s and never touch the player/titan directly, so damage routes to whichever the player is in. Dead hostiles stay in `Game.enemies` until `isFinished()` (death animations); kills are scored once via `scoredKills`. New enemy types: implement `Hostile`, add spawns in `Game`. Units that fire physical rounds use `HostileGun` (`hostileWeapons.ts`), which clips rounds against level geometry and handles splash. Units a cloak drone can hide implement `refreshCloak()`/`isCloaked()` with a `CloakController` (it toggles `material.transparent`, which needs `needsUpdate`; per-unit materials only). Turrets get a static Cannon collider in `Game.addHostile()` that is removed when the wreck is disposed.
+- **Scale**: the titan rig is modelled ~11.2 m tall and scaled by `TITAN_SCALE` (0.62 → ~7 m) on a root node above the rig, so IK and poses stay in model units. Anything world-space about the titan (physics box, cockpit camera height, movement probes, enemy hitbox in `Game`) must multiply by the scale. Reference sizes: pilot eye 1.75 m, grunt 1.9 m, reaper 3 m, titan 7 m, Colossus 18 m.
+- **Boss (`Colossus`)**: attacks are pose keyframes (`samplePose`) with one-shot events via `once()`; gameplay hit volumes are analytic (arcs, radii, shockwave rings) rather than mesh collision. `HostileContext.targetGrounded` lets pilots jump shockwaves and `targetDodging` (titan dash) grants i-frames. Its leg/pelvis spheres become kinematic Cannon bodies synced each frame in `Game.syncHostileBodies()`. The boss bar/banner go through `GameUI.updateBossBar()`/`showBanner()` with `BossStatus` from `types.ts`.
+- **Titan rounds** are hit-tested along the segment travelled each frame (`Titan.findSegmentHit`), and an entity in front of a wall takes the hit before the wall does.
 - **Per-frame allocation**: projectiles and particles share cached geometries/materials and only update transforms. Don't create geometries or materials per bullet/particle, and don't dispose shared ones in `disposeBullet`.
 
 ## Gamepad Support

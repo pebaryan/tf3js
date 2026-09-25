@@ -7,12 +7,14 @@ import { Reaper } from './reaper';
 import { Stalker } from './stalker';
 import { Drone, DroneVariant } from './drone';
 import { Turret, TurretVariant } from './turret';
+import { Colossus } from './colossus';
 import { Hostile, HostileContext } from './hostile';
 import { ImpactEffectsRenderer } from './effects';
-import { createLevel, updateLevelVisuals } from './level';
+import { createLevel, updateLevelVisuals, BOSS_ARENA_CENTER } from './level';
 import { LevelType, Level, LEVELS } from './levels';
 import { Player, createWeaponMesh } from './player';
 import { Titan, TitanState } from './titan';
+import { TITAN_SCALE } from './titanModel';
 import { GameState, GameStats } from './types';
 import { GameUI } from './ui';
 import { Weapon, Attachment, ATTACHMENTS, cloneWeapon, EVA8_WEAPON, KRABER_WEAPON, EPG_WEAPON, ALTERNATOR_WEAPON, CAR_WEAPON, FLATLINE_WEAPON, MASTIFF_WEAPON, WINGMAN_WEAPON, LSTAR_WEAPON } from './weapons';
@@ -74,7 +76,9 @@ export class Game {
   private reapersSpawned = 0;
   private scoredKills = new WeakSet<Hostile>();
   /** Static physics colliders for emplacements (turrets). */
-  private hostileBodies = new Map<Hostile, CANNON.Body>();
+  private hostileBodies = new Map<Hostile, CANNON.Body[]>();
+  /** Game time the boss went down (level completes a few seconds later). */
+  private bossDefeatedAt: number | null = null;
   private nextSquadId = 1;
   capturePoints: CapturePoint[] = [];
   checkpoints: Checkpoint[] = [];
@@ -379,7 +383,7 @@ export class Game {
 
   /** Put the pilot back on foot next to `titan`, with an optional launch velocity. */
   private ejectPilot(titan: Titan, launch: THREE.Vector3): void {
-    const exitOffset = new THREE.Vector3(0, 0, 4).applyAxisAngle(new THREE.Vector3(0, 1, 0), titan.group.rotation.y);
+    const exitOffset = new THREE.Vector3(0, 0, 4 * TITAN_SCALE + 0.6).applyAxisAngle(new THREE.Vector3(0, 1, 0), titan.group.rotation.y);
     const titanPos = titan.group.position;
     this.player.body.position.set(titanPos.x + exitOffset.x, titanPos.y + 0.5, titanPos.z + exitOffset.z);
 
@@ -500,6 +504,9 @@ export class Game {
     this.enemies.forEach((enemy) => enemy.dispose());
     this.enemies = [];
     this.hostileBodies.clear();
+    this.bossDefeatedAt = null;
+    this.ui.hideBossBar();
+    this.ui.hideBanner();
     this.worldEffects?.disposeAll();
     this.worldEffects = null;
     this.capturePoints = [];
@@ -718,15 +725,64 @@ export class Game {
       const p = hostile.group.position;
       body.position.set(p.x, p.y + height / 2, p.z);
       this.world.addBody(body);
-      this.hostileBodies.set(hostile, body);
+      this.hostileBodies.set(hostile, [body]);
+    }
+    // The Colossus: one sphere collider per leg/pelvis part, moved with the animation every frame
+    if (hostile instanceof Colossus) {
+      const bodies = hostile.colliders().map(({ center, radius }) => {
+        const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
+        body.addShape(new CANNON.Sphere(radius));
+        body.position.set(center.x, center.y, center.z);
+        this.world.addBody(body);
+        return body;
+      });
+      this.hostileBodies.set(hostile, bodies);
     }
   }
 
   private removeHostileBody(hostile: Hostile): void {
-    const body = this.hostileBodies.get(hostile);
-    if (!body) return;
-    this.world.removeBody(body);
+    const bodies = this.hostileBodies.get(hostile);
+    if (!bodies) return;
+    for (const body of bodies) this.world.removeBody(body);
     this.hostileBodies.delete(hostile);
+  }
+
+  /** Keep moving colliders (the Colossus's legs) in sync with their bones. */
+  private syncHostileBodies(): void {
+    for (const enemy of this.enemies) {
+      if (!(enemy instanceof Colossus)) continue;
+      const bodies = this.hostileBodies.get(enemy);
+      if (!bodies) continue;
+      const colliders = enemy.colliders();
+      if (colliders.length === 0) {
+        this.removeHostileBody(enemy);
+        continue;
+      }
+      colliders.forEach(({ center }, i) => bodies[i]?.position.set(center.x, center.y, center.z));
+    }
+  }
+
+  private spawnColossus(): void {
+    this.addHostile(new Colossus(this.scene, BOSS_ARENA_CENTER.clone(), 0));
+  }
+
+  /** Boss health bar and the "felled" banner. */
+  private updateBossUI(): void {
+    const boss = this.enemies.find((e): e is Colossus => e instanceof Colossus);
+    if (!boss || !boss.awake) {
+      this.ui.hideBossBar();
+      return;
+    }
+    const status = boss.status();
+    if (boss.isDead()) {
+      this.ui.hideBossBar();
+      if (this.bossDefeatedAt === null) {
+        this.bossDefeatedAt = this.stats.time;
+        this.ui.showBanner('COLOSSUS FELLED', status.name);
+      }
+      return;
+    }
+    this.ui.updateBossBar(status);
   }
 
   private spawnStalker(position: THREE.Vector3, active = false): void {
@@ -765,6 +821,7 @@ export class Game {
     }
 
     for (let i = 0; i < (level.reaperCount ?? 0); i++) this.spawnReaper();
+    if (level.type === LevelType.BOSS) this.spawnColossus();
 
     const stalkers = this.getStalkerSpawnPositions(level.type);
     for (let i = 0; i < (level.stalkerCount ?? 0); i++) this.spawnStalker(stalkers[i % stalkers.length].clone());
@@ -1222,8 +1279,8 @@ export class Game {
     const piloting = this.isPiloting();
     if (piloting && this.titan) {
       // Enemies engage the titan itself, which is a much bigger target than a pilot
-      hitbox.center.copy(this.titan.group.position).add(new THREE.Vector3(0, 5, 0));
-      hitbox.radius = 3;
+      hitbox.center.copy(this.titan.group.position).add(new THREE.Vector3(0, 5 * TITAN_SCALE, 0));
+      hitbox.radius = 3.4 * TITAN_SCALE;
     }
     if (!this.worldEffects) this.worldEffects = new ImpactEffectsRenderer(this.scene);
 
@@ -1233,6 +1290,12 @@ export class Game {
       target: hitbox.center,
       targetVelocity: this.player.getVelocity(),
       targetIsTitan: piloting,
+      targetGrounded: piloting || this.player.isGrounded(),
+      targetDodging: piloting && !!this.titan?.isDashing(),
+      shake: (intensity) => {
+        if (piloting && this.titan) this.titan.addShake(intensity);
+        else this.player.addCameraShake(intensity);
+      },
       hitbox,
       worldMeshes: this.getWorldMeshes(),
       hostiles: this.enemies,
@@ -1264,6 +1327,8 @@ export class Game {
       }
     }
     this.enemies.push(...spawned);
+    this.syncHostileBodies();
+    this.updateBossUI();
   }
 
   addScore(amount: number) {
@@ -1297,6 +1362,10 @@ export class Game {
         break;
       case LevelType.SURVIVAL:
         complete = this.stats.time >= (level.timeLimit ?? 0);
+        break;
+      case LevelType.BOSS:
+        // Let the death sequence and banner play out first
+        complete = this.bossDefeatedAt !== null && this.stats.time - this.bossDefeatedAt > 7;
         break;
     }
 

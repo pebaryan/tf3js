@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 export type AttachmentType = 'optic' | 'magazine' | 'barrel' | 'stock';
 
 export interface Attachment {
@@ -425,6 +427,28 @@ export const TITAN_WEAPON: Weapon = {
   },
   attachments: {},
 };
+
+/** Muzzle tip of each viewmodel, in weapon space (-z is forward). Shared by the models and the firing code. */
+export const WEAPON_MUZZLES: Record<string, THREE.Vector3> = {
+  'R-201': new THREE.Vector3(0, 0.01, -0.35),
+  'EVA-8': new THREE.Vector3(0, 0.018, -0.26),
+  'Kraber': new THREE.Vector3(0, 0.01, -0.49),
+  'EPG-1': new THREE.Vector3(0, 0.012, -0.19),
+  'Alternator': new THREE.Vector3(0, 0.008, -0.13),
+  'CAR': new THREE.Vector3(0, 0.012, -0.23),
+  'Flatline': new THREE.Vector3(0, 0.012, -0.29),
+  'Mastiff': new THREE.Vector3(0, 0.01, -0.19),
+  'Wingman': new THREE.Vector3(0, 0.018, -0.12),
+  'L-STAR': new THREE.Vector3(0, 0.012, -0.36),
+  'XO-16': new THREE.Vector3(0, 0.02, -0.6),
+};
+
+/** Extra length a barrel attachment adds in front of the muzzle. */
+export function barrelAttachmentLength(attachmentId: string | undefined): number {
+  if (attachmentId === 'suppressor') return 0.15;
+  if (attachmentId === 'stabilizer') return 0.08;
+  return 0;
+}
 
 /**
  * Create an independent copy of a weapon definition.

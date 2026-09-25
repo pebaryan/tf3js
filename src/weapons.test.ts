@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ATTACHMENTS, EVA8_WEAPON, KRABER_WEAPON, R201_WEAPON, WeaponManager, cloneWeapon } from './weapons';
+import {
+  ATTACHMENTS, EVA8_WEAPON, KRABER_WEAPON, PILOT_WEAPONS, R201_WEAPON, WEAPON_MUZZLES, WeaponManager,
+  barrelAttachmentLength, cloneWeapon,
+} from './weapons';
 
 describe('cloneWeapon', () => {
   it('returns an independent copy whose attachments do not leak into the template', () => {
@@ -94,5 +97,23 @@ describe('WeaponManager', () => {
     expect(wm.nextWeapon()!.name).toBe('EVA-8');
     expect(wm.nextWeapon()!.name).toBe('R-201');
     expect(wm.prevWeapon()!.name).toBe('EVA-8');
+  });
+});
+
+
+describe('weapon muzzles', () => {
+  it('defines a forward-facing muzzle for every pilot weapon', () => {
+    for (const weapon of PILOT_WEAPONS) {
+      const muzzle = WEAPON_MUZZLES[weapon.name];
+      expect(muzzle, weapon.name).toBeDefined();
+      expect(muzzle.z, weapon.name).toBeLessThan(-0.05);
+    }
+  });
+
+  it('extends the muzzle for barrel attachments only', () => {
+    expect(barrelAttachmentLength('suppressor')).toBeGreaterThan(0);
+    expect(barrelAttachmentLength('stabilizer')).toBeGreaterThan(0);
+    expect(barrelAttachmentLength(undefined)).toBe(0);
+    expect(barrelAttachmentLength('extended_mag')).toBe(0);
   });
 });

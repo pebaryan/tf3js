@@ -93,6 +93,8 @@ export class Titan {
   private cockpitWeapon: THREE.Group | null = null;
   private cockpitWeaponOffset = new THREE.Vector3();
   private cockpitWeaponRecoil = 0;
+  private cockpitBarrels: THREE.Group | null = null;
+  private barrelSpin = 0;
   private isFiring = false;
   private lastFireTime = 0;
   private readonly FIRE_COOLDOWN = 0.15; // seconds
@@ -650,52 +652,48 @@ export class Titan {
   }
 
   private createCockpitWeaponMesh(): THREE.Group {
+    // First-person XO-16: same design and paint as the third-person cannon, with spinning barrels
     const gun = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x495464, roughness: 0.28, metalness: 0.75 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: 0x232c38, roughness: 0.18, metalness: 0.82 });
-    const accentMat = new THREE.MeshStandardMaterial({ color: 0xff8844, emissive: 0xff6622, emissiveIntensity: 0.4, roughness: 0.22, metalness: 0.55 });
+    const paintMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ac, roughness: 0.5, metalness: 0.35 });
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x2b3139, roughness: 0.34, metalness: 0.8 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x16191d, roughness: 0.45, metalness: 0.6 });
+    const chromeMat = new THREE.MeshStandardMaterial({ color: 0xd4d8dc, roughness: 0.16, metalness: 1.0 });
+    const accentMat = new THREE.MeshStandardMaterial({ color: 0xf36b1c, emissive: 0xff5a10, emissiveIntensity: 0.35, roughness: 0.45, metalness: 0.25 });
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D = gun) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      parent.add(m);
+      return m;
+    };
+    const tube = (r: number, len: number, open = false) => new THREE.CylinderGeometry(r, r, len, 24, 1, open).rotateX(Math.PI / 2);
+    const axle = (r: number, len: number) => new THREE.CylinderGeometry(r, r, len, 24).rotateZ(Math.PI / 2);
 
-    const receiver = new THREE.Mesh(bevelBox(0.34, 0.26, 1.05), bodyMat);
-    receiver.position.set(0, -0.03, -0.18);
-    gun.add(receiver);
+    add(bevelBox(0.36, 0.28, 1.0, 0.05), paintMat, 0, -0.03, -0.1);          // receiver
+    add(bevelBox(0.37, 0.05, 0.7, 0.015), accentMat, 0, 0.09, -0.1);         // stripe
+    add(bevelBox(0.42, 0.26, 0.4, 0.05), frameMat, 0, -0.05, 0.4);           // rear housing
+    for (let i = 0; i < 4; i++) add(bevelBox(0.43, 0.03, 0.05, 0.01), darkMat, 0, -0.05 + (i - 1.5) * 0.055, 0.2); // vents
+    add(bevelBox(0.08, 0.05, 0.18, 0.015), accentMat, 0, 0.16, -0.18);       // rear sight
+    add(bevelBox(0.05, 0.06, 0.08, 0.015), accentMat, 0, 0.15, -0.78);       // front sight post
+    add(bevelBox(0.05, 0.08, 0.12, 0.015), frameMat, 0, 0.09, -0.78);        // front sight mount
+    add(tube(0.17, 0.12), frameMat, 0, -0.01, -0.62);                        // front collar
+    add(tube(0.16, 0.3, true), darkMat, 0, -0.01, -0.8);                     // barrel shroud
 
-    const housing = new THREE.Mesh(bevelBox(0.42, 0.24, 0.42), darkMat);
-    housing.position.set(0, -0.05, 0.28);
-    gun.add(housing);
+    // Rotary barrel cluster (spins while firing, see syncCockpitWeapon)
+    const barrels = new THREE.Group();
+    barrels.position.set(0, -0.01, -0.62);
+    gun.add(barrels);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      add(tube(0.028, 0.42), chromeMat, Math.cos(a) * 0.09, Math.sin(a) * 0.09, -0.2, barrels);
+    }
+    add(tube(0.03, 0.44), frameMat, 0, 0, -0.2, barrels);                     // spindle
+    add(tube(0.13, 0.05), frameMat, 0, 0, -0.38, barrels);                    // muzzle ring
+    this.cockpitBarrels = barrels;
 
-    const spine = new THREE.Mesh(bevelBox(0.14, 0.08, 0.76), darkMat);
-    spine.position.set(0, 0.11, -0.06);
-    gun.add(spine);
-
-    const barrelLeft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.92, 10), darkMat);
-    barrelLeft.rotation.x = Math.PI / 2;
-    barrelLeft.position.set(0.11, -0.01, -0.52);
-    gun.add(barrelLeft);
-
-    const barrelRight = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.92, 10), darkMat);
-    barrelRight.rotation.x = Math.PI / 2;
-    barrelRight.position.set(-0.11, -0.01, -0.52);
-    gun.add(barrelRight);
-
-    const shroud = new THREE.Mesh(bevelBox(0.38, 0.18, 0.34), bodyMat);
-    shroud.position.set(0, 0.01, -0.74);
-    gun.add(shroud);
-
-    const feed = new THREE.Mesh(bevelBox(0.22, 0.16, 0.32), accentMat);
-    feed.position.set(0, -0.18, 0.1);
-    gun.add(feed);
-
-    const rearBlock = new THREE.Mesh(bevelBox(0.28, 0.22, 0.24), darkMat);
-    rearBlock.position.set(0, -0.02, 0.62);
-    gun.add(rearBlock);
-
-    const sightBase = new THREE.Mesh(bevelBox(0.08, 0.05, 0.18), accentMat);
-    sightBase.position.set(0, 0.16, -0.18);
-    gun.add(sightBase);
-
-    const frontSight = new THREE.Mesh(bevelBox(0.05, 0.06, 0.08), accentMat);
-    frontSight.position.set(0, 0.15, -0.78);
-    gun.add(frontSight);
+    // Side ammo drum and feed chute
+    add(axle(0.2, 0.18), paintMat, 0.28, -0.1, 0.15);
+    add(axle(0.09, 0.2), accentMat, 0.28, -0.1, 0.15);
+    add(bevelBox(0.12, 0.14, 0.26, 0.03), frameMat, 0.17, -0.12, 0.0);
 
     gun.userData.adsAnchor = new THREE.Vector3(0, 0.15, -0.26);
     gun.scale.setScalar(1.05);
@@ -757,6 +755,11 @@ export class Titan {
     targetOffset.y += this.cockpitWeaponRecoil * 0.03;
 
     this.cockpitWeaponOffset.lerp(targetOffset, 0.15);
+
+    // Barrels spin up while firing and wind down after
+    const targetSpin = this.isFiring ? 28 : 0;
+    this.barrelSpin += (targetSpin - this.barrelSpin) * Math.min(1, delta * (this.isFiring ? 6 : 1.5));
+    if (this.cockpitBarrels) this.cockpitBarrels.rotation.z += this.barrelSpin * delta;
 
     // Position in world space (same approach as pilot weapon)
     const offset = this.cockpitWeaponOffset.clone().applyQuaternion(camera.quaternion);
@@ -1047,6 +1050,7 @@ export class Titan {
         else child.material.dispose();
       });
       this.cockpitWeapon = null;
+      this.cockpitBarrels = null;
     }
 
     disposeObject3D(this.group);

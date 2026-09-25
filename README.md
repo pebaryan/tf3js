@@ -18,8 +18,12 @@ Click the image above to watch a gameplay demo on YouTube.
   - **Grunts** fight in squads: whoever spots you radios the rest; they take cover behind real geometry, peek out to fire bursts, reload, and run from titans
   - **Ticks** lie dormant until they see you, then scuttle in on a weave, arm with an accelerating beep and explode (shooting one nearby still hurts — and their blasts hurt other enemies)
   - **Reapers** are 3 m bipedal machines that fire homing rocket salvos, stomp anything underfoot and launch ticks from their backs
+  - **Stalkers** stand powered down until one spots you, then the whole pack wakes and walks at you firing bursts. Their glowing chest reactor takes double damage; shoot the legs off and they keep crawling (and shooting); a dead stalker's reactor overloads and blows
+  - **Laser drones** hover out of reach and charge a single heavy laser shot — the red targeting beam trails you and locks just before it fires, so keep moving
+  - **Cloak drones** are unarmed: they shadow grunts and stalkers and cloak everything around them (tethers show who's hidden). Kill the drone and the squad reappears
+  - **Light turrets** sweep their arc, lock on with a laser sight and shred pilots with fast bursts; **anti-titan turrets** traverse slowly and fire heavy explosive shells built to kill titans
 - **Pilot health regenerates** after a few seconds out of fire
-- **Seven missions** across training, capture, race and survival modes
+- **Eight missions** across training, capture, race and survival modes
 - **Rebindable keys** and full **gamepad** support (menus and gameplay), with selectable aim response curves
 - **Modern rendering**: HDR post-processing with bloom, MSAA/FXAA, ground-truth ambient occlusion (Ultra), image-based lighting from the sky, camera-following soft shadows, dynamic muzzle-flash/explosion lights and hit-feedback colour grading
 - **Graphics quality presets** (Low / Medium / High / Ultra) in **Configurations**
@@ -61,6 +65,7 @@ You can carry two weapons. Picking one up fills a free slot, or swaps it for the
 | 5 | Race: Speed Course | Reach all checkpoints within 60 seconds |
 | 6 | Survival: Last Stand | Survive 60 seconds against escalating waves (grunts, then ticks, then reapers) |
 | 7 | Survival: Iron Tide | Survive 90 seconds against reapers, ticks and grunt squads |
+| 8 | Survival: Machine Yard | Survive 100 seconds against stalker packs, laser and cloak drones, and a turret line with an anti-titan gun |
 
 ## Getting Started
 
@@ -106,6 +111,10 @@ src/
 ├── grunt.ts         # Grunt squad AI and model
 ├── tick.ts          # Tick (frag drone) AI and model
 ├── reaper.ts        # Reaper AI, model, rockets and tick launcher
+├── stalker.ts       # Stalker robot AI and model (pack wake, crippling, reactor overload)
+├── drone.ts         # Laser and cloak drones
+├── turret.ts        # Light and anti-titan turrets
+├── hostileWeapons.ts # Projectile gun shared by grunts, stalkers and turrets
 ├── target.ts        # Training targets
 ├── weapons.ts       # Weapon/attachment definitions and WeaponManager
 ├── ballistics.ts    # Projectile simulation and trails
@@ -129,7 +138,7 @@ src/
 
 1. Add an entry to `LEVELS` in `src/levels.ts`.
 2. Add any mission-specific geometry in `createLevel()` in `src/level.ts`.
-3. Set `enemyCount` / `tickCount` / `reaperCount` on the level, and add target and enemy spawn points in `Game.getTargetSpawnPositions()`, `Game.getEnemySpawnPositions()` and `Game.getTickSpawnPositions()`.
+3. Set `enemyCount` / `tickCount` / `reaperCount` / `stalkerCount` / `droneCount` / `cloakDroneCount` / `turretCount` / `titanTurretCount` on the level, and add spawn points for the level type in `Game.getTargetSpawnPositions()`, `getEnemySpawnPositions()`, `getTickSpawnPositions()`, `getStalkerSpawnPositions()`, `getDroneSpawnPositions()` and `getTurretPositions()`.
 
 ## License
 

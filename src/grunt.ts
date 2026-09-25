@@ -1,11 +1,10 @@
 import * as THREE from 'three';
-import { BallisticsSystem, Bullet } from './ballistics';
 import { soundManager } from './sound';
-import { segmentIntersectsSphere } from './collision';
 import { bevelBox, mergeAndDispose } from './geometryUtils';
-import { DEFAULT_MUZZLE_CONFIG, PLAYER_IMPACT_CONFIG } from './effects';
+import { DEFAULT_MUZZLE_CONFIG } from './effects';
+import { HostileGun, applySpread } from './hostileWeapons';
 import {
-  CoverCandidate, Hostile, HostileContext, HostileHit, chooseCover, hasLineOfSight,
+  CloakController, CoverCandidate, Hostile, HostileContext, HostileHit, chooseCover, hasLineOfSight,
   tryMoveHorizontal, turnTowards, yawTowards,
 } from './hostile';
 
@@ -227,8 +226,8 @@ export class Grunt implements Hostile {
   private readonly model: GruntModel;
   private readonly maxHealth: number;
   private readonly difficulty: number;
-  private readonly ballistics: BallisticsSystem;
-  private bullets: Bullet[] = [];
+  private readonly gun: HostileGun;
+  private readonly cloak: CloakController;
 
   private stateTimer = 0;
   private lastKnownTarget: THREE.Vector3 | null = null;
@@ -279,7 +278,8 @@ export class Grunt implements Hostile {
     this.group.rotation.y = Math.random() * Math.PI * 2;
     scene.add(this.group);
 
-    this.ballistics = new BallisticsSystem(scene);
+    this.gun = new HostileGun(scene, { visuals: GRUNT_BULLET_VISUALS, damage: () => BULLET_DAMAGE });
+    this.cloak = new CloakController(this.group);
     for (let i = 0; i < 3; i++) {
       const a = (i / 3) * Math.PI * 2 + Math.random();
       const r = 4 + Math.random() * 4;
@@ -291,7 +291,10 @@ export class Grunt implements Hostile {
   /* ---------------------------- Hostile API ---------------------------- */
 
   isDead(): boolean { return this.health <= 0; }
-  isFinished(): boolean { return this.state === GruntState.DEAD && this.deathTimer > 2 && this.bullets.length === 0; }
+  isFinished(): boolean { return this.state === GruntState.DEAD && this.deathTimer > 2 && this.gun.inFlight === 0; }
+
+  refreshCloak(): void { if (!this.isDead()) this.cloak.refresh(); }
+  isCloaked(): boolean { return this.cloak.engaged; }
 
   checkBulletHit(p: THREE.Vector3): boolean {
     if (this.isDead()) return false;
@@ -331,7 +334,8 @@ export class Grunt implements Hostile {
 
   update(ctx: HostileContext): HostileHit[] {
     const dt = ctx.delta;
-    const hits = this.updateBullets(ctx);
+    const hits = this.gun.update(ctx, this.group.position, this);
+    this.cloak.update(dt);
 
     if (this.state === GruntState.DEAD) {
       this.updateDeath(dt);
@@ -369,8 +373,7 @@ export class Grunt implements Hostile {
       mesh.geometry.dispose();
       (mesh.material as THREE.Material).dispose();
     });
-    for (const b of this.bullets) this.ballistics.disposeBullet(b);
-    this.bullets = [];
+    this.gun.dispose();
   }
 
   /* ------------------------------ Brain ------------------------------- */
@@ -620,50 +623,10 @@ export class Grunt implements Hostile {
     }
     const dir = aim.sub(muzzle).normalize();
     const spread = THREE.MathUtils.degToRad(this.spreadDeg) * (this.state === GruntState.FLEE ? 2 : 1);
-    const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
-    const up = new THREE.Vector3().crossVectors(right, dir).normalize();
-    const a = Math.random() * Math.PI * 2;
-    const r = Math.random() * spread;
-    dir.addScaledVector(right, Math.cos(a) * r).addScaledVector(up, Math.sin(a) * r).normalize();
-
-    this.bullets.push(this.ballistics.createBullet(muzzle, dir.clone().multiplyScalar(BULLET_SPEED), GRUNT_BULLET_VISUALS));
+    applySpread(dir, spread);
+    this.gun.fire(muzzle, dir.clone().multiplyScalar(BULLET_SPEED));
     ctx.effects.spawnMuzzleFlash(muzzle, dir, { ...DEFAULT_MUZZLE_CONFIG, color: 0xff8844, radius: 0.08 });
     soundManager.playSound('enemy_fire', 0.3);
-  }
-
-  private updateBullets(ctx: HostileContext): HostileHit[] {
-    const hits: HostileHit[] = [];
-    const raycaster = new THREE.Raycaster();
-    for (let i = this.bullets.length - 1; i >= 0; i--) {
-      const b = this.bullets[i];
-      const prev = b.mesh.position.clone();
-      this.ballistics.updateBullet(b, ctx.delta);
-
-      // Clip this frame's travel against level geometry so bullets can't pass through walls
-      let end = b.mesh.position;
-      let hitWall: THREE.Intersection | null = null;
-      const step = b.mesh.position.clone().sub(prev);
-      const len = step.length();
-      if (len > 1e-6) {
-        raycaster.set(prev, step.divideScalar(len));
-        raycaster.far = len;
-        hitWall = raycaster.intersectObjects(ctx.worldMeshes, false)[0] ?? null;
-        if (hitWall) end = hitWall.point;
-      }
-
-      const hitTarget = segmentIntersectsSphere(prev, end, ctx.hitbox.center, ctx.hitbox.radius);
-      if (hitTarget) hits.push({ damage: BULLET_DAMAGE, source: this.group.position.clone() });
-      else if (hitWall) {
-        const normal = hitWall.face ? hitWall.face.normal.clone().transformDirection(hitWall.object.matrixWorld) : step.negate();
-        ctx.effects.spawnImpact(hitWall.point, normal, PLAYER_IMPACT_CONFIG);
-      }
-
-      if (hitTarget || hitWall || b.time > b.maxLifetime || b.mesh.position.y < -5) {
-        this.ballistics.disposeBullet(b);
-        this.bullets.splice(i, 1);
-      }
-    }
-    return hits;
   }
 
   /* ---------------------------- Locomotion ---------------------------- */

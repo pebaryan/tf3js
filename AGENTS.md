@@ -33,6 +33,10 @@ src/
 ├── grunt.ts       # Grunt: squad rifleman AI (cover, peek, reload, flee titans)
 ├── tick.ts        # Tick: suicide drone AI + model
 ├── reaper.ts      # Reaper: bipedal robot AI (rockets, stomp, tick launcher) + model
+├── stalker.ts     # Stalker: robot pack AI (wake as a pack, crippled crawl, reactor overload)
+├── drone.ts       # Drones: laser (slow charged shot) and cloak (support) variants
+├── turret.ts      # Turrets: light anti-personnel and heavy anti-titan
+├── hostileWeapons.ts # HostileGun: projectile weapon shared by grunts, stalkers and turrets
 ├── target.ts      # Destructible target entities
 ├── weapons.ts     # Weapon definitions, cloneWeapon, WeaponManager
 ├── ballistics.ts  # Projectile simulation
@@ -65,7 +69,7 @@ src/
 - **Canvas textures** that carry colour must set `texture.colorSpace = THREE.SRGBColorSpace`.
 - **Dynamic lights**: use `flashLight()` from `graphics.ts` for muzzle flashes/explosions. It uses a fixed pool, so the scene's light count never changes (which would recompile every shader).
 - **Geometry**: use `bevelBox()` instead of `BoxGeometry` for visible hard-surface parts. Decorative detail on level blocks is added as *children* (merged per material via `mergeAndDispose`) so gameplay raycasts, which only test top-level scene meshes, and physics are unaffected.
-- **Enemies** implement `Hostile` (`hostile.ts`). `Game.updateEnemies()` builds one `HostileContext` per frame (target, hitbox, world meshes, shared `worldEffects`, `spawn`); hostiles return `HostileHit`s and never touch the player/titan directly, so damage routes to whichever the player is in. Dead hostiles stay in `Game.enemies` until `isFinished()` (death animations); kills are scored once via `scoredKills`. New enemy types: implement `Hostile`, add spawns in `Game`.
+- **Enemies** implement `Hostile` (`hostile.ts`). `Game.updateEnemies()` builds one `HostileContext` per frame (target, hitbox, world meshes, shared `worldEffects`, `spawn`); hostiles return `HostileHit`s and never touch the player/titan directly, so damage routes to whichever the player is in. Dead hostiles stay in `Game.enemies` until `isFinished()` (death animations); kills are scored once via `scoredKills`. New enemy types: implement `Hostile`, add spawns in `Game`. Units that fire physical rounds use `HostileGun` (`hostileWeapons.ts`), which clips rounds against level geometry and handles splash. Units a cloak drone can hide implement `refreshCloak()`/`isCloaked()` with a `CloakController` (it toggles `material.transparent`, which needs `needsUpdate`; per-unit materials only). Turrets get a static Cannon collider in `Game.addHostile()` that is removed when the wreck is disposed.
 - **Per-frame allocation**: projectiles and particles share cached geometries/materials and only update transforms. Don't create geometries or materials per bullet/particle, and don't dispose shared ones in `disposeBullet`.
 
 ## Gamepad Support

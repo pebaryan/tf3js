@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { chooseCover, steerTowards, turnTowards, yawTowards } from './hostile';
+import { CloakController, chooseCover, cloakOpacity, leadTarget, pitchTowards, steerTowards, turnTowards, yawTowards } from './hostile';
 
 const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
@@ -75,5 +75,64 @@ describe('chooseCover', () => {
       { position: v(0, 0, -5), hidden: true, reachable: true },  // 5 m, away from the threat
     ], self, threat);
     expect(best).toBe(1);
+  });
+});
+
+describe('leadTarget', () => {
+  it('aims at a stationary target directly', () => {
+    const aim = leadTarget(v(0, 0, 0), v(0, 0, 20), v(0, 0, 0), 50);
+    expect(aim.distanceTo(v(0, 0, 20))).toBeCloseTo(0);
+  });
+  it('leads a crossing target so the round and target meet', () => {
+    const shooter = v(0, 0, 0);
+    const target = v(0, 0, 30);
+    const vel = v(8, 0, 0);
+    const speed = 60;
+    const aim = leadTarget(shooter, target, vel, speed);
+    expect(aim.x).toBeGreaterThan(0);
+    // Time for the round to reach the aim point equals the time for the target to get there
+    const tRound = aim.length() / speed;
+    const tTarget = aim.distanceTo(target) / vel.length();
+    expect(tRound).toBeCloseTo(tTarget, 4);
+  });
+  it('falls back to the current position when the target outruns the round', () => {
+    const aim = leadTarget(v(0, 0, 0), v(0, 0, 10), v(0, 0, 100), 20);
+    expect(aim.distanceTo(v(0, 0, 10))).toBeCloseTo(0);
+  });
+});
+
+describe('pitchTowards', () => {
+  it('is zero for a level target and positive for a higher one', () => {
+    expect(pitchTowards(v(0, 1, 0), v(0, 1, 10))).toBeCloseTo(0);
+    expect(pitchTowards(v(0, 0, 0), v(0, 10, 10))).toBeCloseTo(Math.PI / 4);
+    expect(pitchTowards(v(0, 10, 0), v(10, 0, 0))).toBeCloseTo(-Math.PI / 4);
+  });
+});
+
+describe('cloak', () => {
+  it('never makes a unit fully invisible', () => {
+    expect(cloakOpacity(0)).toBe(1);
+    expect(cloakOpacity(1)).toBeGreaterThan(0);
+    expect(cloakOpacity(1)).toBeLessThan(0.2);
+  });
+
+  it('fades opaque materials while refreshed, restores them after, and skips transparent ones', () => {
+    const root = new THREE.Group();
+    const body = new THREE.MeshStandardMaterial();
+    const flash = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.3 });
+    root.add(new THREE.Mesh(new THREE.BoxGeometry(), body));
+    root.add(new THREE.Mesh(new THREE.BoxGeometry(), flash));
+    const cloak = new CloakController(root);
+
+    for (let i = 0; i < 60; i++) { cloak.refresh(); cloak.update(1 / 30); }
+    expect(cloak.engaged).toBe(true);
+    expect(body.transparent).toBe(true);
+    expect(body.opacity).toBeLessThan(0.25);
+    expect(flash.opacity).toBe(0.3);
+
+    for (let i = 0; i < 90; i++) cloak.update(1 / 30);
+    expect(cloak.engaged).toBe(false);
+    expect(body.transparent).toBe(false);
+    expect(body.opacity).toBe(1);
   });
 });

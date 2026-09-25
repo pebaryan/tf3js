@@ -350,6 +350,119 @@ export class SoundManager {
       });
     }));
 
+    // laser_charge: rising whine (drone telegraph)
+    this.soundMap.set('laser_charge', await this.synth(1.0, (ctx) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, 0);
+      osc.frequency.exponentialRampToValueAtTime(2400, 1.0);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 3000;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.01, 0);
+      g.gain.exponentialRampToValueAtTime(0.25, 0.9);
+      g.gain.linearRampToValueAtTime(0, 1.0);
+      osc.connect(lp).connect(g).connect(ctx.destination);
+      osc.start(0); osc.stop(1.0);
+    }));
+
+    // laser_fire: sharp zap with a falling tail
+    this.soundMap.set('laser_fire', await this.synth(0.35, (ctx) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(1800, 0);
+      osc.frequency.exponentialRampToValueAtTime(120, 0.3);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.4, 0);
+      g.gain.exponentialRampToValueAtTime(0.01, 0.32);
+      osc.connect(g).connect(ctx.destination);
+      osc.start(0); osc.stop(0.35);
+      const noise = this.noiseSource(ctx, 0.1);
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass'; hp.frequency.value = 4000;
+      const g2 = ctx.createGain();
+      g2.gain.setValueAtTime(0.3, 0);
+      g2.gain.exponentialRampToValueAtTime(0.01, 0.08);
+      noise.connect(hp).connect(g2).connect(ctx.destination);
+      noise.start(0);
+    }));
+
+    // turret_fire: tight mechanical crack
+    this.soundMap.set('turret_fire', await this.synth(0.09, (ctx) => {
+      const noise = this.noiseSource(ctx, 0.09);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = 3200; bp.Q.value = 3;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.7, 0);
+      g.gain.exponentialRampToValueAtTime(0.01, 0.07);
+      noise.connect(bp).connect(g).connect(ctx.destination);
+      noise.start(0);
+    }));
+
+    // heavy_cannon: deep boom for the anti-titan turret
+    this.soundMap.set('heavy_cannon', await this.synth(0.7, (ctx) => {
+      const osc = ctx.createOscillator();
+      osc.frequency.setValueAtTime(110, 0);
+      osc.frequency.exponentialRampToValueAtTime(35, 0.5);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(1.0, 0);
+      g.gain.exponentialRampToValueAtTime(0.01, 0.6);
+      osc.connect(g).connect(ctx.destination);
+      osc.start(0); osc.stop(0.6);
+      const noise = this.noiseSource(ctx, 0.4);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 900;
+      const g2 = ctx.createGain();
+      g2.gain.setValueAtTime(0.8, 0);
+      g2.gain.exponentialRampToValueAtTime(0.01, 0.35);
+      noise.connect(lp).connect(g2).connect(ctx.destination);
+      noise.start(0);
+    }));
+
+    // power_up: servo rising sweep (stalker/turret activation)
+    this.soundMap.set('power_up', await this.synth(0.6, (ctx) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(90, 0);
+      osc.frequency.exponentialRampToValueAtTime(520, 0.5);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.01, 0);
+      g.gain.linearRampToValueAtTime(0.3, 0.1);
+      g.gain.exponentialRampToValueAtTime(0.01, 0.58);
+      osc.connect(g).connect(ctx.destination);
+      osc.start(0); osc.stop(0.6);
+    }));
+
+    // overload: stuttering alarm before a reactor blows
+    this.soundMap.set('overload', await this.synth(0.9, (ctx) => {
+      for (let i = 0; i < 6; i++) {
+        const t = i * 0.15 * (1 - i * 0.08);
+        const osc = ctx.createOscillator();
+        osc.type = 'square';
+        osc.frequency.value = 900 + i * 120;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.18, t + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.01, t + 0.07);
+        osc.connect(g).connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.08);
+      }
+    }));
+
+    // cloak: airy shimmer when a cloak field engages
+    this.soundMap.set('cloak', await this.synth(0.5, (ctx) => {
+      const noise = this.noiseSource(ctx, 0.5);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.Q.value = 6;
+      bp.frequency.setValueAtTime(6000, 0);
+      bp.frequency.exponentialRampToValueAtTime(900, 0.45);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.3, 0);
+      g.gain.exponentialRampToValueAtTime(0.01, 0.48);
+      noise.connect(bp).connect(g).connect(ctx.destination);
+      noise.start(0);
+    }));
+
   }
 
   playSound(name: string, volume: number = 1.0) {

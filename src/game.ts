@@ -4,6 +4,9 @@ import { Target } from './target';
 import { Grunt } from './grunt';
 import { Tick } from './tick';
 import { Reaper } from './reaper';
+import { Stalker } from './stalker';
+import { Drone, DroneVariant } from './drone';
+import { Turret, TurretVariant } from './turret';
 import { Hostile, HostileContext } from './hostile';
 import { ImpactEffectsRenderer } from './effects';
 import { createLevel, updateLevelVisuals } from './level';
@@ -70,6 +73,8 @@ export class Game {
   private worldEffects: ImpactEffectsRenderer | null = null;
   private reapersSpawned = 0;
   private scoredKills = new WeakSet<Hostile>();
+  /** Static physics colliders for emplacements (turrets). */
+  private hostileBodies = new Map<Hostile, CANNON.Body>();
   private nextSquadId = 1;
   capturePoints: CapturePoint[] = [];
   checkpoints: Checkpoint[] = [];
@@ -494,6 +499,7 @@ export class Game {
     this.targets = [];
     this.enemies.forEach((enemy) => enemy.dispose());
     this.enemies = [];
+    this.hostileBodies.clear();
     this.worldEffects?.disposeAll();
     this.worldEffects = null;
     this.capturePoints = [];
@@ -660,8 +666,81 @@ export class Game {
     }
   }
 
+  /** Dormant stalker positions per level type. */
+  private getStalkerSpawnPositions(type: LevelType): THREE.Vector3[] {
+    switch (type) {
+      case LevelType.SURVIVAL:
+        return [new THREE.Vector3(-9, 0, -36), new THREE.Vector3(9, 0, -36), new THREE.Vector3(-11, 0, -47), new THREE.Vector3(11, 0, -47)];
+      case LevelType.CAPTURE:
+        return [new THREE.Vector3(-10, 0, 48), new THREE.Vector3(10, 0, 48)];
+      default:
+        return [new THREE.Vector3(-10, 0, -40), new THREE.Vector3(10, 0, -40)];
+    }
+  }
+
+  /** Where drones start hovering. */
+  private getDroneSpawnPositions(type: LevelType): THREE.Vector3[] {
+    switch (type) {
+      case LevelType.SURVIVAL:
+        return [new THREE.Vector3(-10, 6, -42), new THREE.Vector3(10, 6, -42), new THREE.Vector3(0, 6, -28)];
+      case LevelType.CAPTURE:
+        return [new THREE.Vector3(0, 6, 42), new THREE.Vector3(-12, 6, 40)];
+      default:
+        return [new THREE.Vector3(0, 6, -50)];
+    }
+  }
+
+  /** Turret emplacements per level type: light turrets first, then heavy ones. */
+  private getTurretPositions(type: LevelType, variant: TurretVariant): THREE.Vector3[] {
+    switch (type) {
+      case LevelType.SURVIVAL:
+        return variant === 'titan'
+          ? [new THREE.Vector3(13, 0, -55), new THREE.Vector3(-13, 0, -55)]
+          : [new THREE.Vector3(-13, 0, -55), new THREE.Vector3(7, 0, -50), new THREE.Vector3(-17, 0, -12), new THREE.Vector3(17, 0, -12)];
+      case LevelType.CAPTURE:
+        return variant === 'titan'
+          ? [new THREE.Vector3(0, 0, 55)]
+          : [new THREE.Vector3(-8, 0, 42), new THREE.Vector3(8, 0, 42)];
+      case LevelType.RACE:
+        return [new THREE.Vector3(10, 0, -58), new THREE.Vector3(-10, 0, -30)];
+      default:
+        return [];
+    }
+  }
+
   private addHostile(hostile: Hostile): void {
     this.enemies.push(hostile);
+    // Turrets are solid emplacements: give them a static collider
+    if (hostile instanceof Turret) {
+      const { radius, height } = hostile.collider;
+      const body = new CANNON.Body({ mass: 0 });
+      body.addShape(new CANNON.Cylinder(radius, radius, height, 10));
+      const p = hostile.group.position;
+      body.position.set(p.x, p.y + height / 2, p.z);
+      this.world.addBody(body);
+      this.hostileBodies.set(hostile, body);
+    }
+  }
+
+  private removeHostileBody(hostile: Hostile): void {
+    const body = this.hostileBodies.get(hostile);
+    if (!body) return;
+    this.world.removeBody(body);
+    this.hostileBodies.delete(hostile);
+  }
+
+  private spawnStalker(position: THREE.Vector3, active = false): void {
+    this.addHostile(new Stalker(this.scene, position, { active }));
+  }
+
+  private spawnDrone(position: THREE.Vector3, variant: DroneVariant): void {
+    this.addHostile(new Drone(this.scene, position, variant));
+  }
+
+  private spawnTurret(position: THREE.Vector3, variant: TurretVariant): void {
+    // Face the middle of the map (where the pilot drops in)
+    const facing = Math.atan2(-position.x, -position.z);
+    this.addHostile(new Turret(this.scene, position, variant, facing));
   }
 
   private spawnGrunt(position: THREE.Vector3, squadId: number, aggressive = true, difficulty = 0.3 + Math.random() * 0.4): void {
@@ -686,6 +765,19 @@ export class Game {
     }
 
     for (let i = 0; i < (level.reaperCount ?? 0); i++) this.spawnReaper();
+
+    const stalkers = this.getStalkerSpawnPositions(level.type);
+    for (let i = 0; i < (level.stalkerCount ?? 0); i++) this.spawnStalker(stalkers[i % stalkers.length].clone());
+
+    const drones = this.getDroneSpawnPositions(level.type);
+    let d = 0;
+    for (let i = 0; i < (level.droneCount ?? 0); i++) this.spawnDrone(drones[d++ % drones.length].clone(), 'laser');
+    for (let i = 0; i < (level.cloakDroneCount ?? 0); i++) this.spawnDrone(drones[d++ % drones.length].clone(), 'cloak');
+
+    const light = this.getTurretPositions(level.type, 'light');
+    for (let i = 0; i < Math.min(level.turretCount ?? 0, light.length); i++) this.spawnTurret(light[i].clone(), 'light');
+    const heavy = this.getTurretPositions(level.type, 'titan');
+    for (let i = 0; i < Math.min(level.titanTurretCount ?? 0, heavy.length); i++) this.spawnTurret(heavy[i].clone(), 'titan');
   }
 
   private spawnReaper(): void {
@@ -709,7 +801,7 @@ export class Game {
     updateLevelVisuals(performance.now() * 0.001);
 
     // Update radar with enemy positions
-    this.player.updateRadar(this.enemies.filter((e) => !e.isDead()).map((e) => ({ position: e.group.position })));
+    this.player.updateRadar(this.enemies.filter((e) => !e.isDead() && !e.isCloaked?.()).map((e) => ({ position: e.group.position })));
     this.player.renderRadar();
 
     this.updateObjectives(delta);
@@ -1079,6 +1171,25 @@ export class Game {
     const corner = corners[Math.floor(Math.random() * corners.length)];
     const jitter = () => corner.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0, (Math.random() - 0.5) * 3));
 
+    const level = this.currentLevel!;
+    const roll = Math.random();
+    if ((level.stalkerCount ?? 0) > 0 && t > 20 && roll < 0.3) {
+      // Stalker pack walking in, already powered up
+      for (let i = 0; i < 3; i++) this.spawnStalker(jitter(), true);
+      return;
+    }
+    if ((level.droneCount ?? 0) > 0 && t > 30 && roll < 0.45) {
+      // Drone escort: a laser drone, or a cloak drone hiding a grunt fireteam
+      if ((level.cloakDroneCount ?? 0) > 0 && Math.random() < 0.5) {
+        const squad = this.nextSquadId++;
+        for (let i = 0; i < 2; i++) this.spawnGrunt(jitter(), squad, true, Math.min(0.9, 0.35 + t / 150));
+        this.spawnDrone(jitter().setY(6), 'cloak');
+      } else {
+        this.spawnDrone(jitter().setY(6), 'laser');
+      }
+      return;
+    }
+
     if (t > 18 && Math.random() < 0.4) {
       // Tick pack: they wake immediately and rush in
       for (let i = 0; i < 3; i++) {
@@ -1147,6 +1258,7 @@ export class Game {
         }
       }
       if (enemy.isFinished()) {
+        this.removeHostileBody(enemy);
         enemy.dispose();
         this.enemies.splice(i, 1);
       }

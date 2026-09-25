@@ -54,6 +54,7 @@ src/
 - `GameUI` is instantiated in `Game` constructor as `this.ui`. All DOM manipulation goes through `GameUI` — do not add DOM code to `game.ts`.
 - `GameUI.init()` accepts callbacks (`onTogglePause`, `onCallTitan`) rather than holding a reference to `Game`, keeping `ui.ts` decoupled.
 - Physics body velocity is set directly on `body.velocity` (Cannon-es Vector3), not via forces, for responsive player movement.
+- Pilot body: a 0.4 m sphere (`PLAYER_RADIUS`) at the feet plus a 0.3 m head sphere 1 m above it; grounded movement snaps the sphere onto the floor. The camera sits `eyeOffset` above the body centre (1.3 m standing, ≈1.7 m eye height; 0.75 m crouched/sliding). Probes that look for walls (mantle) must cover chest/head height, not just the foot sphere.
 - Wall run: `wallNormal` is set by `checkWall()` raycasts (left/right). Movement is projected onto the wall tangent plane to prevent camera-look direction from pulling the player off the wall.
 - **Lifecycle**: every level restart goes through `Game.teardownLevel()`. Anything that registers DOM listeners, appends DOM elements or allocates GPU resources must expose `dispose()`/`destroy()` and be called from there. Register listeners with an `AbortController` signal so they can be removed in one call (see `Player`).
 - Weapon constants (`R201_WEAPON`, ...) are shared templates — never mutate them. `WeaponManager` stores copies via `cloneWeapon()`.

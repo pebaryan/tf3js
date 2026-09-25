@@ -4,7 +4,7 @@ import { getBindings, getAimCurve, applyAimCurve } from "./keybindings";
 import { Attachment, Weapon, WeaponManager, R201_WEAPON, MAX_WEAPON_SLOTS, WEAPON_MUZZLES, barrelAttachmentLength } from "./weapons";
 import { BallisticsSystem, Bullet } from "./ballistics";
 import { ImpactEffectsRenderer, PLAYER_IMPACT_CONFIG, DEFAULT_MUZZLE_CONFIG, EPG_EXPLOSION_CONFIG, FRAG_EXPLOSION_CONFIG } from "./effects";
-import { MovementSystem, MovementInput } from "./movement";
+import { MovementSystem, MovementInput, PLAYER_RADIUS } from "./movement";
 import { AimingSystem } from "./aiming";
 import { ReticleRenderer } from "./reticle";
 import { RadarRenderer } from "./radar";
@@ -489,6 +489,16 @@ export class Player {
 
   health = 100;
   titanMeter = 0;
+
+  /*
+   * Eye height: the body sphere's centre sits PLAYER_RADIUS (0.4 m) above the
+   * floor, so a 1.3 m offset puts the eye at ~1.7 m — a grown adult, level
+   * with the 1.88 m grunts' visors. Crouching or sliding lowers it.
+   */
+  private readonly STAND_EYE_OFFSET = 1.3;
+  private readonly CROUCH_EYE_OFFSET = 0.75;
+  private readonly HEAD_COLLIDER_OFFSET = 1.0;
+  private eyeOffset = 1.3;
   private timeSinceDamage = 0;
   private readonly REGEN_DELAY = 4;
   private readonly REGEN_RATE = 25;
@@ -546,7 +556,7 @@ export class Player {
     this.world = world;
     this.group = new THREE.Group();
 
-    const shape = new CANNON.Sphere(0.4);
+    const shape = new CANNON.Sphere(PLAYER_RADIUS);
     this.body = new CANNON.Body({
       mass: 1,
       shape,
@@ -555,6 +565,8 @@ export class Player {
       linearDamping: 0,
       angularDamping: 1,
     });
+    // Head collider: keeps the (now taller) camera from poking into ceilings and platform undersides
+    this.body.addShape(new CANNON.Sphere(0.3), new CANNON.Vec3(0, this.HEAD_COLLIDER_OFFSET, 0));
     this.body.type = CANNON.Body.DYNAMIC;
     world.addBody(this.body);
 
@@ -602,7 +614,7 @@ export class Player {
   private syncViewmodelAnchors(): void {
     this.camera.quaternion.setFromEuler(this.euler);
     this.camera.position.copy(this.group.position);
-    this.camera.position.y += 0.5;
+    this.camera.position.y += this.eyeOffset;
     this.syncWeaponMeshToCamera();
   }
 
@@ -738,6 +750,11 @@ export class Player {
       this.gamepadJumpPrev = this.gamepadCrouchPrev = this.gamepadMenuPrev = true;
       this.gamepadDpadDownPrev = this.gamepadReloadPrev = this.gamepadGrenadePrev = this.gamepadGrapplePrev = true;
     }
+  }
+
+  /** Height of the pilot's hands above the body centre (grapple rope origin). */
+  private handHeight(): number {
+    return this.eyeOffset - 0.4;
   }
 
   /** True while the pilot is inside a titan (entering, piloting or exiting). */
@@ -1316,7 +1333,7 @@ export class Player {
     if (this.grapplePreviewLine) { this.scene.remove(this.grapplePreviewLine); this.grapplePreviewLine.geometry.dispose(); (this.grapplePreviewLine.material as THREE.Material).dispose(); this.grapplePreviewLine = null; }
     if (this.grappleRope) {
       (this.grappleRope.material as THREE.MeshBasicMaterial).opacity = 0.85;
-      const ropeStart = this.group.position.clone().add(new THREE.Vector3(0, 0.3, 0));
+      const ropeStart = this.group.position.clone().add(new THREE.Vector3(0, this.handHeight(), 0));
       const ropeSlack = Math.max(0.12, ropeStart.distanceTo(this.grappleTarget) * 0.025);
       this.updateGrappleRope(ropeStart, this.grappleTarget, ropeSlack);
     }
@@ -1361,7 +1378,7 @@ export class Player {
     if (!this.isGrappling) return;
     const m = this.movement, playerPos = this.group.position, toTarget = this.grappleTarget.clone().sub(playerPos), dist = toTarget.length();
     if (this.grappleRope) {
-      const ropeStart = playerPos.clone().add(new THREE.Vector3(0, 0.3, 0));
+      const ropeStart = playerPos.clone().add(new THREE.Vector3(0, this.handHeight(), 0));
       const ropeSlack = Math.max(0.05, (dist - this.GRAPPLE_SLACK_DISTANCE) * 0.18);
       this.updateGrappleRope(ropeStart, this.grappleTarget, ropeSlack);
     }
@@ -1467,7 +1484,7 @@ export class Player {
     const raycaster = new THREE.Raycaster(); raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera); raycaster.far = this.GRAPPLE_RANGE;
     const hits = raycaster.intersectObjects(this.getMeshes());
     if (hits.length > 0) {
-      const start = this.group.position.clone().add(new THREE.Vector3(0, 0.3, 0)), end = hits[0].point.clone();
+      const start = this.group.position.clone().add(new THREE.Vector3(0, this.handHeight(), 0)), end = hits[0].point.clone();
       if (this.grapplePreviewLine) { const posAttr = this.grapplePreviewLine.geometry.attributes.position as THREE.BufferAttribute; posAttr.setXYZ(0, start.x, start.y, start.z); posAttr.setXYZ(1, end.x, end.y, end.z); posAttr.needsUpdate = true; }
       else { this.grapplePreviewLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([start, end]), new THREE.LineDashedMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.5, dashSize: 1, gapSize: 0.5 })); (this.grapplePreviewLine as THREE.Line).computeLineDistances(); this.scene.add(this.grapplePreviewLine); }
     } else if (this.grapplePreviewLine) {
@@ -1479,7 +1496,10 @@ export class Player {
   private adsFOV = 45;
   private currentFOV = 75;
   private syncCamera() {
-    this.camera.quaternion.setFromEuler(this.euler); this.camera.position.copy(this.group.position); this.camera.position.y += 0.5;
+    this.camera.quaternion.setFromEuler(this.euler); this.camera.position.copy(this.group.position); this.camera.position.y += this.eyeOffset;
+    const crouched = this.movement.isSliding || ((this.keys.crouch || this.gamepadCrouch) && this.movement.isGrounded);
+    const targetEye = crouched ? this.CROUCH_EYE_OFFSET : this.STAND_EYE_OFFSET;
+    this.eyeOffset += (targetEye - this.eyeOffset) * 0.2;
     const isADS = this.isADSActive(), targetFOV = isADS ? (this.activeWeapon.name === 'Kraber' ? 20 : this.adsFOV) : this.baseFOV;
     this.currentFOV += (targetFOV - this.currentFOV) * 0.15; this.camera.fov = this.currentFOV; this.camera.updateProjectionMatrix();
     if (this.weaponMesh) {

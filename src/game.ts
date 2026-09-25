@@ -52,7 +52,9 @@ const CAPTURE_WIN_TIME = 30;
 const CAPTURE_RADIUS = 3;
 const CHECKPOINT_RADIUS = 4;
 const TITAN_EMBARK_RANGE = 3;
-const PLAYER_HITBOX_RADIUS = 0.5;
+/** Enemy fire hitbox for the pilot: a sphere from about the shins to the head (body centre + 0.6 m). */
+const PLAYER_HITBOX_RADIUS = 0.7;
+const PLAYER_HITBOX_HEIGHT = 0.6;
 
 export class Game {
   scene!: THREE.Scene;
@@ -1105,7 +1107,7 @@ export class Game {
 
   private updateEnemies(delta: number) {
     const playerPos = this.player.group.position;
-    const hitbox = { center: playerPos.clone().add(new THREE.Vector3(0, 0.5, 0)), radius: PLAYER_HITBOX_RADIUS };
+    const hitbox = { center: playerPos.clone().add(new THREE.Vector3(0, PLAYER_HITBOX_HEIGHT, 0)), radius: PLAYER_HITBOX_RADIUS };
     const piloting = this.isPiloting();
     if (piloting && this.titan) {
       // Enemies engage the titan itself, which is a much bigger target than a pilot

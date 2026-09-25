@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
+/** Radius of the player's body collision sphere (m). */
+export const PLAYER_RADIUS = 0.4;
+
 export interface MovementInput {
   forward: boolean;
   backward: boolean;
@@ -52,6 +55,8 @@ export class MovementSystem {
   private edgeBoostCooldown = 0;
   private coyoteTimer = 0;
   private jumpBufferTimer = 0;
+  private groundDistance = 0;
+  private groundNormalY = 1;
 
   // Snapshot of the current frame's input, set at the top of update().
   private input: MovementInput = {
@@ -85,6 +90,7 @@ export class MovementSystem {
   private readonly MANTLE_BOOST = 8;
   private readonly MANTLE_MAX_HEIGHT = 2.5;
   private readonly MANTLE_MIN_HEIGHT = 0.3;
+  private readonly MANTLE_PROBE_HEIGHTS = [0.3, 0.8, 1.2] as const;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -175,8 +181,24 @@ export class MovementSystem {
     const from = new THREE.Vector3(
       this.body.position.x, this.body.position.y, this.body.position.z,
     );
-    return new THREE.Raycaster(from, new THREE.Vector3(0, -1, 0), 0, 0.55)
-      .intersectObjects(this.getMeshes()).length > 0;
+    const hit = new THREE.Raycaster(from, new THREE.Vector3(0, -1, 0), 0, 0.55)
+      .intersectObjects(this.getMeshes())[0];
+    if (!hit) return false;
+    this.groundDistance = hit.distance;
+    const n = hit.face?.normal.clone().transformDirection(hit.object.matrixWorld);
+    this.groundNormalY = n ? Math.max(0.3, Math.abs(n.y)) : 1;
+    return true;
+  }
+
+  /**
+   * The ground probe reports "grounded" up to 0.55 m below the body centre,
+   * while the collision sphere only reaches 0.4 m, so the player could hover
+   * up to 15 cm off the floor. Pull the body down onto the surface. The rest
+   * distance grows on slopes (r / cos θ), so ramps aren't pushed into.
+   */
+  private snapToGround(): void {
+    const rest = PLAYER_RADIUS / this.groundNormalY + 0.005;
+    if (this.groundDistance > rest) this.body.position.y -= this.groundDistance - rest;
   }
 
   private checkGroundedWithSurface(): {
@@ -238,10 +260,16 @@ export class MovementSystem {
     fwd.y = 0;
     fwd.normalize();
 
-    // 1. Forward at chest – is there a wall?
-    const fwdHits = new THREE.Raycaster(
-      pos.clone().add(new THREE.Vector3(0, 0.3, 0)), fwd, 0, 1.0,
-    ).intersectObjects(meshes);
+    // 1. Forward from waist to head height – is there a wall? The pilot's
+    // head collider sits ~1 m above the body sphere, so ledges at chest
+    // height block us even when the waist ray passes underneath them.
+    let fwdHits: THREE.Intersection[] = [];
+    for (const h of this.MANTLE_PROBE_HEIGHTS) {
+      fwdHits = new THREE.Raycaster(
+        pos.clone().add(new THREE.Vector3(0, h, 0)), fwd, 0, 1.0,
+      ).intersectObjects(meshes);
+      if (fwdHits.length > 0) break;
+    }
     if (fwdHits.length === 0) return { can: false, ledgeY: 0 };
 
     // 2. Forward at head – must be clear (wall too tall otherwise)
@@ -616,6 +644,7 @@ export class MovementSystem {
         }
       }
       if (this.vel.y < 0) this.vel.y = 0;
+      if (this.vel.y === 0) this.snapToGround();
 
     } else {
       // ---- AIRBORNE ----

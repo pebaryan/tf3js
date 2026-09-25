@@ -319,6 +319,11 @@ export function createLevel(scene: THREE.Scene, world: CANNON.World, levelConfig
   floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
   world.addBody(floorBody);
 
+  if (config.type === 'boss') {
+    createBossArena(scene, world);
+    return;
+  }
+
   // === SECTION 1: WALL RUN CORRIDOR (6m wide) ===
   // Long straight walls for practicing wall runs and wall jumps (6m apart)
   createWall(-3.25, 12, -20, 0.5, 40, scene, world);  // Left wall
@@ -494,11 +499,12 @@ function makeBoxMaterial(w: number, h: number, d: number, baseMat: THREE.MeshSta
   });
 }
 
-function createWall(x: number, height: number, z: number, width: number, depth: number, scene: THREE.Scene, world: CANNON.World) {
+function createWall(x: number, height: number, z: number, width: number, depth: number, scene: THREE.Scene, world: CANNON.World, yaw = 0) {
   const geo = bevelBox(width, height, depth, 0.05);
   const mat = makeBoxMaterial(width, height, depth, wallMaterial);
   const wall = new THREE.Mesh(geo, mat);
   wall.position.set(x, height / 2, z);
+  wall.rotation.y = yaw;
   wall.castShadow = true;
   wall.receiveShadow = true;
   scene.add(wall);
@@ -510,7 +516,55 @@ function createWall(x: number, height: number, z: number, width: number, depth: 
   const body = new CANNON.Body({ mass: 0 });
   body.addShape(shape);
   body.position.set(x, height / 2, z);
+  body.quaternion.setFromEuler(0, yaw, 0);
   world.addBody(body);
+}
+
+/** Centre of the boss arena and its wall radius (the Colossus spawns at the centre). */
+export const BOSS_ARENA_CENTER = new THREE.Vector3(0, 0, -35);
+export const BOSS_ARENA_RADIUS = 48;
+
+/**
+ * Colosseum for the boss fight: a ring wall, broken pillars for cover from the
+ * beam and mortars (and to wall-run up for a shot at the reactor), low rubble
+ * and a glowing boundary line.
+ */
+function createBossArena(scene: THREE.Scene, world: CANNON.World) {
+  const c = BOSS_ARENA_CENTER;
+  const R = BOSS_ARENA_RADIUS;
+  const segments = 28;
+  const segWidth = (2 * Math.PI * R) / segments + 0.6;
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const height = 14 + (i % 3 === 0 ? 4 : 0);
+    // Tangent segment: width runs along the ring, depth is the wall thickness
+    createWall(c.x + Math.sin(a) * R, height, c.z + Math.cos(a) * R, segWidth, 2, scene, world, a);
+  }
+
+  // Pillars on an inner ring (some broken short enough to climb), skipping the entry line
+  const pillarRing = 27;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+    const broken = i % 2 === 1;
+    createWall(c.x + Math.sin(a) * pillarRing, broken ? 5 : 13, c.z + Math.cos(a) * pillarRing, 3.5, 3.5, scene, world, a);
+  }
+
+  // Low rubble: knee-high cover and mantling practice
+  const rubble: [number, number, number, number][] = [
+    [-14, -18, 4, 1.4], [15, -20, 3, 1.2], [-20, -45, 5, 1.6], [19, -50, 4, 1.3], [0, -68, 6, 1.5], [-6, -8, 3, 1.1],
+  ];
+  for (const [x, z, w, h] of rubble) createPlatform(x, h / 2, z, w, h, w * 0.7, scene, world);
+
+  // Glowing boundary line on the floor
+  const ringMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff5a2a).multiplyScalar(3) });
+  const line = new THREE.Mesh(new THREE.RingGeometry(R - 3.2, R - 2.9, 128).rotateX(-Math.PI / 2), ringMat);
+  line.position.set(c.x, 0.02, c.z);
+  line.userData.ignoreRaycast = true;
+  scene.add(line);
+  const inner = new THREE.Mesh(new THREE.RingGeometry(9.8, 10.1, 96).rotateX(-Math.PI / 2), ringMat);
+  inner.position.set(c.x, 0.02, c.z);
+  inner.userData.ignoreRaycast = true;
+  scene.add(inner);
 }
 
 function createPlatform(x: number, y: number, z: number, width: number, height: number, depth: number, scene: THREE.Scene, world: CANNON.World) {

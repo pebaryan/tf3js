@@ -489,6 +489,7 @@ export class Player {
 
   health = 100;
   titanMeter = 0;
+  private cameraShake = 0;
 
   /*
    * Eye height: the body sphere's centre sits PLAYER_RADIUS (0.4 m) above the
@@ -955,6 +956,10 @@ export class Player {
     this.group.position.set(position.x, position.y + 1, position.z);
     this.euler.y = yaw;
   }
+
+  /** Jolt the view (0..1); stacks up to 1 and decays over ~half a second. */
+  addCameraShake(intensity: number): void { this.cameraShake = Math.min(1, Math.max(this.cameraShake, intensity)); }
+  isGrounded(): boolean { return this.movement.isGrounded; }
 
   resetTitanMeter(): void { this.titanMeter = 0; if (this.onTitanMeterChange) this.onTitanMeterChange(0); }
   setVelocity(x: number, y: number, z: number): void { this.movement.vel.set(x, y, z); }
@@ -1497,6 +1502,14 @@ export class Player {
   private currentFOV = 75;
   private syncCamera() {
     this.camera.quaternion.setFromEuler(this.euler); this.camera.position.copy(this.group.position); this.camera.position.y += this.eyeOffset;
+    if (this.cameraShake > 0.005) {
+      // Heavy impacts nearby: jitter the view, decaying quickly
+      const k = this.cameraShake * 0.25;
+      this.camera.position.x += (Math.random() - 0.5) * k;
+      this.camera.position.y += (Math.random() - 0.5) * k;
+      this.camera.rotateZ((Math.random() - 0.5) * this.cameraShake * 0.02);
+      this.cameraShake *= 0.9;
+    }
     const crouched = this.movement.isSliding || ((this.keys.crouch || this.gamepadCrouch) && this.movement.isGrounded);
     const targetEye = crouched ? this.CROUCH_EYE_OFFSET : this.STAND_EYE_OFFSET;
     this.eyeOffset += (targetEye - this.eyeOffset) * 0.2;

@@ -2,7 +2,8 @@ export enum LevelType {
   TRAINING = 'training',
   CAPTURE = 'capture',
   RACE = 'race',
-  SURVIVAL = 'survival'
+  SURVIVAL = 'survival',
+  BOSS = 'boss'
 }
 
 export interface Level {
@@ -19,6 +20,16 @@ export interface Level {
   tickCount?: number;
   /** Reapers deployed at the start. */
   reaperCount?: number;
+  /** Stalkers standing powered-down around the map (they wake as a pack). */
+  stalkerCount?: number;
+  /** Laser drones on patrol. */
+  droneCount?: number;
+  /** Cloak drones supporting the ground units. */
+  cloakDroneCount?: number;
+  /** Light anti-personnel turrets. */
+  turretCount?: number;
+  /** Heavy anti-titan turrets. */
+  titanTurretCount?: number;
   timeLimit: number | null;
   requiredScore: number;
 }
@@ -70,6 +81,8 @@ export const LEVELS: Level[] = [
     targetCount: 0,
     enemyCount: 4,
     tickCount: 2,
+    droneCount: 1,
+    turretCount: 2,
     timeLimit: 180,
     requiredScore: 1000
   },
@@ -83,6 +96,7 @@ export const LEVELS: Level[] = [
     targetCount: 0,
     enemyCount: 2,
     tickCount: 3,
+    turretCount: 1,
     timeLimit: 60,
     requiredScore: 1200
   },
@@ -95,6 +109,7 @@ export const LEVELS: Level[] = [
     objective: 'Survive for 60 seconds',
     targetCount: 0,
     enemyCount: 6,
+    stalkerCount: 2,
     timeLimit: 60,
     requiredScore: 1500
   },
@@ -109,7 +124,37 @@ export const LEVELS: Level[] = [
     enemyCount: 4,
     tickCount: 4,
     reaperCount: 1,
+    droneCount: 1,
     timeLimit: 90,
     requiredScore: 2500
+  },
+  {
+    id: 8,
+    name: 'Survival: Machine Yard',
+    type: LevelType.SURVIVAL,
+    description: 'Stalker packs, laser and cloak drones, and a turret line with an anti-titan gun',
+    layout: 'open',
+    objective: 'Survive for 100 seconds',
+    targetCount: 0,
+    enemyCount: 3,
+    stalkerCount: 4,
+    droneCount: 2,
+    cloakDroneCount: 1,
+    turretCount: 2,
+    titanTurretCount: 1,
+    timeLimit: 100,
+    requiredScore: 3000
+  },
+  {
+    id: 9,
+    name: 'Boss: The Iron Sovereign',
+    type: LevelType.BOSS,
+    description: 'An 18 m Colossus guards the arena. Learn its tells, punish its recoveries, break its stance',
+    layout: 'arena',
+    objective: 'Destroy the Colossus',
+    targetCount: 0,
+    enemyCount: 0,
+    timeLimit: null,
+    requiredScore: 5000
   }
 ];

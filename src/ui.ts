@@ -1,4 +1,4 @@
-import { DebugHUDData, GameState, GameStats, WeaponHUDData } from './types';
+import { BossStatus, DebugHUDData, GameState, GameStats, WeaponHUDData } from './types';
 import { Level, LevelType } from './levels';
 import { GraphicsQuality, GRAPHICS_QUALITY_LABELS, getGraphicsQuality } from './graphicsSettings';
 import { Bindings, DEFAULT_BINDINGS, ACTION_LABELS, getBindings, setBindings, keyCodeToLabel, rebind, AimCurve, AIM_CURVE_LABELS, getAimCurve, setAimCurve } from './keybindings';
@@ -1150,6 +1150,9 @@ export class GameUI {
         statsText += `ENEMIES: ${enemyCount}<br>`;
         statsText += `TIME: ${Math.floor(stats.time)}s/${currentLevel.timeLimit}s`;
         break;
+      case LevelType.BOSS:
+        statsText += `TIME: ${Math.floor(stats.time)}s`;
+        break;
       default:
         statsText += `TARGETS: ${destroyedTargets}/${currentLevel.targetCount}`;
     }
@@ -1677,5 +1680,95 @@ export class GameUI {
     // Remove the old floating overlay if it still exists.
     const old = document.getElementById('piloting-indicator');
     if (old) old.remove();
+  }
+
+  /* ------------------------------ Boss UI ----------------------------- */
+
+  private bossBar: HTMLElement | null = null;
+  private bossName: HTMLElement | null = null;
+  private bossFill: HTMLElement | null = null;
+  private bossChip: HTMLElement | null = null;
+  private bossStagger: HTMLElement | null = null;
+  private bossStaggerLabel: HTMLElement | null = null;
+  private bossChipValue = 1;
+  private banner: HTMLElement | null = null;
+  private bannerTimer: number | null = null;
+
+  /** Souls-style boss bar: name, health with a lagging damage trail, and a stagger meter. */
+  updateBossBar(status: BossStatus): void {
+    if (!this.bossBar) {
+      const bar = document.createElement('div');
+      bar.id = 'boss-bar';
+      bar.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);width:min(62vw,760px);z-index:90;pointer-events:none;font-family:Georgia,"Times New Roman",serif;';
+      const name = document.createElement('div');
+      name.style.cssText = 'color:#e8d6a8;font-size:15px;letter-spacing:3px;margin-bottom:5px;text-shadow:0 0 6px rgba(0,0,0,0.9);';
+      const track = document.createElement('div');
+      track.style.cssText = 'position:relative;height:12px;background:rgba(10,8,8,0.75);border:1px solid rgba(232,214,168,0.45);box-shadow:0 0 12px rgba(0,0,0,0.6);';
+      const chip = document.createElement('div');
+      chip.style.cssText = 'position:absolute;left:0;top:0;bottom:0;width:100%;background:#e8c070;opacity:0.75;';
+      const fill = document.createElement('div');
+      fill.style.cssText = 'position:absolute;left:0;top:0;bottom:0;width:100%;background:linear-gradient(#c8302a,#7a1410);';
+      track.append(chip, fill);
+      const staggerTrack = document.createElement('div');
+      staggerTrack.style.cssText = 'position:relative;margin-top:4px;height:4px;width:60%;background:rgba(10,8,8,0.6);';
+      const stagger = document.createElement('div');
+      stagger.style.cssText = 'position:absolute;left:0;top:0;bottom:0;width:0%;background:#f0b040;';
+      staggerTrack.appendChild(stagger);
+      const staggerLabel = document.createElement('div');
+      staggerLabel.style.cssText = 'margin-top:3px;font:11px monospace;letter-spacing:2px;color:#f0b040;height:13px;';
+      bar.append(name, track, staggerTrack, staggerLabel);
+      document.body.appendChild(bar);
+      this.bossBar = bar;
+      this.bossName = name;
+      this.bossFill = fill;
+      this.bossChip = chip;
+      this.bossStagger = stagger;
+      this.bossStaggerLabel = staggerLabel;
+      this.bossChipValue = 1;
+    }
+    this.bossBar.style.display = 'block';
+    const frac = Math.max(0, Math.min(1, status.health / status.maxHealth));
+    // The pale "chip" trails the real health so big hits read clearly
+    this.bossChipValue = Math.max(frac, this.bossChipValue - 0.004);
+    if (this.bossName!.textContent !== status.name) this.bossName!.textContent = status.name;
+    this.bossFill!.style.width = `${(frac * 100).toFixed(2)}%`;
+    this.bossChip!.style.width = `${(this.bossChipValue * 100).toFixed(2)}%`;
+    this.bossFill!.style.background = status.phase === 2 ? 'linear-gradient(#a040e0,#4a1070)' : 'linear-gradient(#c8302a,#7a1410)';
+    const s = Math.max(0, Math.min(1, status.stagger / status.staggerMax));
+    this.bossStagger!.style.width = `${(status.staggered ? 100 : s * 100).toFixed(1)}%`;
+    this.bossStagger!.style.background = status.staggered ? (Math.floor(performance.now() / 150) % 2 ? '#fff4c0' : '#f0b040') : '#f0b040';
+    const label = status.staggered ? 'STANCE BROKEN // STRIKE THE CORE' : '';
+    if (this.bossStaggerLabel!.textContent !== label) this.bossStaggerLabel!.textContent = label;
+  }
+
+  hideBossBar(): void {
+    if (this.bossBar && this.bossBar.style.display !== 'none') this.bossBar.style.display = 'none';
+    this.bossChipValue = 1;
+  }
+
+  /** Big centred banner ("COLOSSUS FELLED") that fades in and out. */
+  showBanner(title: string, subtitle = ''): void {
+    if (!this.banner) {
+      const b = document.createElement('div');
+      b.id = 'boss-banner';
+      b.style.cssText = 'position:fixed;left:0;right:0;top:38%;padding:26px 0;text-align:center;z-index:95;pointer-events:none;opacity:0;transition:opacity 0.9s ease;background:linear-gradient(90deg,transparent,rgba(0,0,0,0.75) 20%,rgba(0,0,0,0.75) 80%,transparent);font-family:Georgia,"Times New Roman",serif;';
+      document.body.appendChild(b);
+      this.banner = b;
+    }
+    this.banner.innerHTML = `<div style="color:#e8c070;font-size:52px;letter-spacing:10px;text-shadow:0 0 18px rgba(232,192,112,0.6);">${title}</div>`
+      + (subtitle ? `<div style="color:#bfae88;font-size:14px;letter-spacing:4px;margin-top:8px;">${subtitle}</div>` : '');
+    this.banner.style.display = 'block';
+    requestAnimationFrame(() => { if (this.banner) this.banner.style.opacity = '1'; });
+    if (this.bannerTimer !== null) window.clearTimeout(this.bannerTimer);
+    this.bannerTimer = window.setTimeout(() => { if (this.banner) this.banner.style.opacity = '0'; }, 5000);
+  }
+
+  hideBanner(): void {
+    if (this.bannerTimer !== null) window.clearTimeout(this.bannerTimer);
+    this.bannerTimer = null;
+    if (this.banner) {
+      this.banner.style.opacity = '0';
+      this.banner.style.display = 'none';
+    }
   }
 }

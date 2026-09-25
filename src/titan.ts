@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { bevelBox } from './geometryUtils';
 import { disposeObject3D } from './collision';
-import { buildTitanModel, poseTitanArms, poseTitanLegs, TitanRig } from './titanModel';
+import { buildTitanModel, poseTitanArms, poseTitanLegs, TitanRig, TITAN_SCALE } from './titanModel';
+
+/** World-space size of the (scaled) titan. */
+const S = TITAN_SCALE;
 import { BallisticsSystem, Bullet } from './ballistics';
 import { ImpactEffectsRenderer, TITAN_IMPACT_CONFIG } from './effects';
 import { TITAN_WEAPON } from './weapons';
@@ -121,9 +124,12 @@ export class Titan {
     this.group = new THREE.Group();
     this.group.position.copy(position || new THREE.Vector3(0, 0, 0));
     
-    // Build procedural Titan mesh
+    // Build procedural Titan mesh (rig in model units under a scaled root)
+    const scaleRoot = new THREE.Group();
+    scaleRoot.scale.setScalar(S);
+    this.group.add(scaleRoot);
     this.body = new THREE.Group();
-    this.group.add(this.body);
+    scaleRoot.add(this.body);
     
     this.rig = buildTitanModel(this.body, 8);
     this.torso = this.rig.torso;
@@ -154,13 +160,13 @@ export class Titan {
 
   private createPhysicsBody(): void {
     // Create a box shape for the titan's body
-    const shape = new CANNON.Box(new CANNON.Vec3(2, 5, 2));
+    const shape = new CANNON.Box(new CANNON.Vec3(2 * S, 5 * S, 2 * S));
     this.bodyBody = new CANNON.Body({
       mass: 0, // Static body, doesn't move
       shape: shape,
       position: new CANNON.Vec3(
         this.group.position.x,
-        this.group.position.y + 5, // Center of the titan
+        this.group.position.y + 5 * S, // Center of the titan
         this.group.position.z
       )
     });
@@ -171,7 +177,7 @@ export class Titan {
     if (this.bodyBody) {
       this.bodyBody.position.set(
         this.group.position.x,
-        this.group.position.y + 5,
+        this.group.position.y + 5 * S,
         this.group.position.z
       );
     }
@@ -186,8 +192,8 @@ export class Titan {
     }
 
     const dir = move.clone().normalize();
-    const rayDistance = distance + 2.2;
-    const sampleHeights = [1.0, 5.0, 8.5];
+    const rayDistance = distance + 2.2 * S;
+    const sampleHeights = [1.0 * S, 5.0 * S, 8.5 * S];
     const raycaster = new THREE.Raycaster();
 
     for (const y of sampleHeights) {
@@ -564,8 +570,8 @@ export class Titan {
   getCockpitCamera(): { position: THREE.Vector3; rotation: THREE.Euler } {
     // Position is at the titan's torso cockpit/visor level (no head)
     const pos = this.group.position.clone();
-    pos.y += 8.9 + this.body.position.y * 0.85 + this.walkBobAmount; // Cockpit tracks crouch + walk bob
-    pos.add(new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.pilotEuler.y));
+    pos.y += (8.9 + this.body.position.y * 0.85) * S + this.walkBobAmount; // Cockpit tracks crouch + walk bob
+    pos.add(new THREE.Vector3(0, 0, -S).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.pilotEuler.y));
 
     const rot = this.pilotEuler.clone();
     rot.z += this.walkRollAmount; // Subtle side-to-side roll while walking
@@ -633,7 +639,7 @@ export class Titan {
     const isDashing = this.dashTimer > 0;
     if (speed > 0.5 || isDashing) {
       const bobFreq = isDashing ? 14 : 3.5;
-      const bobIntensity = isDashing ? 0.06 : 0.18;
+      const bobIntensity = (isDashing ? 0.06 : 0.18) * S;
       const rollIntensity = isDashing ? 0.002 : 0.008;
       this.walkBobTime += delta * bobFreq;
       this.walkBobAmount = Math.sin(this.walkBobTime * 2) * bobIntensity;
@@ -857,54 +863,30 @@ export class Titan {
       this.ballisticsSystem.updateBullet(b, delta);
       const step = b.mesh.position.clone().sub(prevPos);
 
-      let hit = false;
+      // Nearest wall along this frame's path, then the first entity before it.
+      // Rounds travel ~4 m per frame, so entities are sampled along the whole
+      // segment (not just the end point) or they'd tunnel through smaller hitboxes.
+      let wallHit: THREE.Intersection | null = null;
       const stepLen = step.length();
       if (stepLen > 1e-6) {
         const raycaster = new THREE.Raycaster(prevPos, step.clone().normalize(), 0, stepLen);
-        const wallHits = raycaster.intersectObjects(worldMeshes, false);
-        if (wallHits.length > 0 && wallHits[0].distance <= stepLen) {
-          const wallHit = wallHits[0];
-          b.mesh.position.copy(wallHit.point);
-          const hitNormal = wallHit.face
-            ? wallHit.face.normal.clone().transformDirection((wallHit.object as THREE.Mesh).matrixWorld)
-            : step.clone().normalize().negate();
-          this.impactRenderer.spawnImpact(wallHit.point, hitNormal, TITAN_IMPACT_CONFIG);
-          hit = true;
-        }
+        wallHit = raycaster.intersectObjects(worldMeshes, false)[0] ?? null;
       }
-
-      if (hit) {
-        this.ballisticsSystem.disposeBullet(b);
-        this.bullets.splice(i, 1);
-        continue;
-      }
-
-      for (const target of targets) {
-        if (target.checkBulletHit(b.mesh.position)) {
-          target.takeDamage(TITAN_WEAPON.damage, b.mesh.position);
-          this.impactRenderer.spawnImpact(
-            b.mesh.position.clone(),
-            b.velocity.clone().normalize().negate(),
-            TITAN_IMPACT_CONFIG,
-          );
-          hit = true;
-          break;
-        }
-      }
-
-      if (!hit) {
-        for (const enemy of enemies) {
-          if (enemy.checkBulletHit(b.mesh.position)) {
-            enemy.takeDamage(TITAN_WEAPON.damage, b.mesh.position);
-            this.impactRenderer.spawnImpact(
-              b.mesh.position.clone(),
-              b.velocity.clone().normalize().negate(),
-              TITAN_IMPACT_CONFIG,
-            );
-            hit = true;
-            break;
-          }
-        }
+      const end = wallHit ? wallHit.point : b.mesh.position;
+      const entityHit = this.findSegmentHit(prevPos, end, [...targets, ...enemies]);
+      let hit = false;
+      if (entityHit) {
+        b.mesh.position.copy(entityHit.point);
+        entityHit.entity.takeDamage(TITAN_WEAPON.damage, entityHit.point);
+        this.impactRenderer.spawnImpact(entityHit.point.clone(), b.velocity.clone().normalize().negate(), TITAN_IMPACT_CONFIG);
+        hit = true;
+      } else if (wallHit) {
+        b.mesh.position.copy(wallHit.point);
+        const hitNormal = wallHit.face
+          ? wallHit.face.normal.clone().transformDirection((wallHit.object as THREE.Mesh).matrixWorld)
+          : step.clone().normalize().negate();
+        this.impactRenderer.spawnImpact(wallHit.point, hitNormal, TITAN_IMPACT_CONFIG);
+        hit = true;
       }
 
       if (hit || b.time > b.maxLifetime) {
@@ -914,6 +896,25 @@ export class Titan {
     }
   }
   
+  /** First entity whose hitbox contains a point sampled along `from` → `to` (every 0.4 m). */
+  private findSegmentHit(
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    entities: (TitanBulletTarget | TitanBulletEnemy)[],
+  ): { entity: TitanBulletTarget | TitanBulletEnemy; point: THREE.Vector3 } | null {
+    if (entities.length === 0) return null;
+    const len = from.distanceTo(to);
+    const steps = Math.max(1, Math.ceil(len / 0.4));
+    const p = new THREE.Vector3();
+    for (let i = 1; i <= steps; i++) {
+      p.lerpVectors(from, to, i / steps);
+      for (const entity of entities) {
+        if (entity.checkBulletHit(p)) return { entity, point: p.clone() };
+      }
+    }
+    return null;
+  }
+
   private exitingTimer = 0;
   private exitingPhase = 0; // 0=fade out, 1=fade in, 2=crouch down
   private onExitFadedOut: (() => void) | null = null;
@@ -1016,6 +1017,15 @@ export class Titan {
     this.shield = Math.min(this.maxShield, this.shield + amount);
   }
   
+  addShake(intensity: number): void {
+    this.shakeIntensity = Math.max(this.shakeIntensity, intensity);
+  }
+
+  /** Mid-dash: dodges telegraphed melee and shockwave attacks. */
+  isDashing(): boolean {
+    return this.dashTimer > 0;
+  }
+
   getShakeIntensity(): number {
     return this.shakeIntensity;
   }

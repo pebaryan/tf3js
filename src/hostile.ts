@@ -11,7 +11,7 @@ import type { ImpactEffectsRenderer } from './effects';
  * the damage to the pilot or to the titan being piloted.
  */
 
-export type HostileKind = 'grunt' | 'tick' | 'reaper';
+export type HostileKind = 'grunt' | 'tick' | 'reaper' | 'stalker' | 'drone' | 'turret' | 'colossus';
 
 export interface HostileHit {
   damage: number;
@@ -31,6 +31,12 @@ export interface HostileContext {
   targetVelocity: THREE.Vector3;
   /** True while the player is inside a titan (grunts run from titans). */
   targetIsTitan: boolean;
+  /** Target is standing on something (pilots can jump over ground shockwaves; titans can't). */
+  targetGrounded: boolean;
+  /** Target is mid-dodge (titan dash): invulnerable to telegraphed melee/shockwave attacks. */
+  targetDodging: boolean;
+  /** Shake the player's view (0..1), e.g. for heavy impacts nearby. */
+  shake: (intensity: number) => void;
   hitbox: TargetHitbox;
   /** Opaque level geometry for line-of-sight, movement and projectile collision. */
   worldMeshes: THREE.Mesh[];
@@ -52,6 +58,13 @@ export interface Hostile extends Damageable {
   /** Death animation finished; safe to dispose and remove. */
   isFinished(): boolean;
   dispose(): void;
+  /**
+   * Cloak support (units a cloak drone can hide). Call every frame the unit
+   * should stay cloaked; the cloak fades out shortly after the calls stop.
+   */
+  refreshCloak?(): void;
+  /** Mostly invisible right now (hidden from the radar too). */
+  isCloaked?(): boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -161,4 +174,104 @@ export function chooseCover(candidates: readonly CoverCandidate[], self: THREE.V
     }
   });
   return best;
+}
+
+/**
+ * Where to aim so a projectile fired at `speed` from `shooter` meets a target
+ * at `target` moving with constant `velocity`. Falls back to the target's
+ * current position when no intercept exists (target outrunning the round).
+ */
+export function leadTarget(shooter: THREE.Vector3, target: THREE.Vector3, velocity: THREE.Vector3, speed: number): THREE.Vector3 {
+  const rel = target.clone().sub(shooter);
+  const a = velocity.lengthSq() - speed * speed;
+  const b = 2 * rel.dot(velocity);
+  const c = rel.lengthSq();
+  let t: number;
+  if (Math.abs(a) < 1e-6) {
+    t = b !== 0 ? -c / b : -1;
+  } else {
+    const disc = b * b - 4 * a * c;
+    if (disc < 0) return target.clone();
+    const sq = Math.sqrt(disc);
+    const t1 = (-b - sq) / (2 * a);
+    const t2 = (-b + sq) / (2 * a);
+    t = Math.min(t1, t2) > 0 ? Math.min(t1, t2) : Math.max(t1, t2);
+  }
+  if (!(t > 0)) return target.clone();
+  return target.clone().addScaledVector(velocity, t);
+}
+
+/** Pitch (rotation about X, positive = up) to look from `from` towards `to`. */
+export function pitchTowards(from: THREE.Vector3, to: THREE.Vector3): number {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  return Math.atan2(to.y - from.y, Math.hypot(dx, dz));
+}
+
+/** Opacity multiplier for a cloak that is `amount` (0..1) engaged: never fully invisible. */
+export function cloakOpacity(amount: number): number {
+  return 1 - 0.9 * THREE.MathUtils.clamp(amount, 0, 1);
+}
+
+/**
+ * Fades every opaque material under `root` in and out for the cloak effect.
+ * Materials that are already transparent (hit flashes, glows with their own
+ * fades) are left alone. Each unit owns its materials, so this never leaks
+ * onto another unit.
+ */
+export class CloakController {
+  private readonly materials: { mat: THREE.Material; opacity: number }[] = [];
+  private readonly meshes: { mesh: THREE.Mesh; castShadow: boolean }[] = [];
+  private amount = 0;
+  private hold = 0;
+  private applied = -1;
+  private time = Math.random() * 10;
+
+  constructor(root: THREE.Object3D) {
+    const seen = new Set<THREE.Material>();
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      this.meshes.push({ mesh, castShadow: mesh.castShadow });
+      for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        if (seen.has(mat) || mat.transparent) continue;
+        seen.add(mat);
+        this.materials.push({ mat, opacity: mat.opacity });
+      }
+    });
+  }
+
+  /** Keep the cloak up for a little longer. */
+  refresh(): void {
+    this.hold = 0.35;
+  }
+
+  get engaged(): boolean {
+    return this.amount > 0.5;
+  }
+
+  update(dt: number): void {
+    this.hold = Math.max(0, this.hold - dt);
+    const target = this.hold > 0 ? 1 : 0;
+    this.amount += (target - this.amount) * Math.min(1, dt * 4);
+    if (Math.abs(this.amount - target) < 0.01) this.amount = target;
+    this.time += dt;
+    if (this.amount === 0 && this.applied === 0) return;
+
+    // Faint shimmer so a sharp-eyed pilot can still pick them out
+    const shimmer = this.amount > 0 ? 0.05 * Math.sin(this.time * 9) * this.amount : 0;
+    const k = THREE.MathUtils.clamp(cloakOpacity(this.amount) + shimmer, 0, 1);
+    for (const { mat, opacity } of this.materials) {
+      const cloaked = this.amount > 0;
+      if (mat.transparent !== cloaked) {
+        // Transparency is part of the shader's program key (OPAQUE define)
+        mat.transparent = cloaked;
+        mat.needsUpdate = true;
+      }
+      mat.depthWrite = !cloaked || this.amount < 0.5;
+      mat.opacity = opacity * k;
+    }
+    for (const { mesh, castShadow } of this.meshes) mesh.castShadow = castShadow && this.amount < 0.5;
+    this.applied = this.amount;
+  }
 }
